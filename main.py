@@ -184,14 +184,14 @@ def potential_reader(A, Z, N_q, dq, qlim, file_extension='.1'):
     isotope_file = isotope_name + file_extension
     exact_place = os.getcwd()   # finds exact directory
     if OS == 'Windows':
-        os.chdir(path + 'Potentials data\\')
+        os.chdir(path + 'PES data\\')
     elif OS == 'Darwin':
-        os.chdir(path + '/Potentials data/')
+        os.chdir(path + '/PES data/')
     else:
-        os.chdir(dir_path + 'Potentials data//')
+        os.chdir(dir_path + 'PES data//')
     if isotope_file not in os.listdir():
         os.chdir(exact_place)
-        print('Error! there no file in Potential data directory')
+        print('Error! there no file in PES data directory')
         sys.exit()
     data = open(isotope_file, 'r').readlines()   # reading data from file
     os.chdir(exact_place)
