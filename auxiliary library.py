@@ -722,7 +722,6 @@ def fcs_pythonic(q):
         z = np.linspace(z_sh - z_0, z_0 + z_sh, N)
         ρ_2 = ρ2_jit(a, z, z_sh, z_0, True)
 
-
 #   Nonaxiallity parameter
     η = a[0]
 
@@ -801,8 +800,6 @@ def fcs_pythonic(q):
                                  - r1 * (z1 - z2) * dr1dz)\
                         * (r22 - r1r2 + r1 * sph12 * dr2dp  + r2 * Δz * dr2dz)
                     cou += a1 * a2 * a3 * a4 * numenator/ denumenator
-
-#    print(sur,cou)
     
     b_surf = 0.25 * z_0 * sur
     b_curv = 0.125 * z_0 * cur
@@ -924,7 +921,6 @@ def fcs_short(q):
                         * (r22 - r1r2 + r1 * sph12 * dr2dp  + r2 * Δz * dr2dz)
                     cou += a1 * a2 * a3 * a4 * numenator/ denumenator
 
-#    print(sur,cou)
     b_surf = 0.25 * z_0 * sur
     b_curv = 0.125 * z_0 * cur
     b_coul = 5 / 64 * z_0**2 * cou
@@ -1276,7 +1272,6 @@ def surface_coefficients(q):
     bk2 = .125 * lim2 * (1 - bf)**(-1 / 3) * cur2
 
     return bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2
-    # return bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2, bf
 
 if __name__ == "__main__":
     pass
