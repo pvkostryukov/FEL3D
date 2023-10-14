@@ -1146,6 +1146,7 @@ if __name__ == "__main__":
     inp_data = pd.read_excel('input.xlsx')
 
     exact_place = os.getcwd()
+    path = os.getcwd()
 
     num_ptn = '[-+]? (?: (?: \d* \. \d+ ) | (?: \d+ \.? ) )(?: [Ee] [+-]? \d+ ) ?'
     rx = re.compile(num_ptn, re.VERBOSE)
@@ -1330,7 +1331,9 @@ if __name__ == "__main__":
                                'p4': p_out[:, 2],
                                'Rneck': rn_out, 'Temperature': temp_out})
 
-        res_path = path + 'Result\\' if OS == 'Windows' else path + 'Result/'
+        res_path = path + 'Result\\' if OS == 'Windows' else path + '/Result/'
+        if not os.path.isdir(res_path):
+            os.mkdir(res_path)
         res_path += f'{datetime.datetime.today().strftime("%d-%m-%y")}'
         if not os.path.isdir(res_path):
             os.mkdir(res_path)
