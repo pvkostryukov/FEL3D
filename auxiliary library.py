@@ -52,7 +52,8 @@ def cum_trapz(func, x):
 
 @nb.njit(fastmath=True)
 def Sdx(f, x):
-    """One dimensional integration by Simpson-like formula
+    """
+    One dimensional integration by Simpson-like formula
        f  array of function values f(x)
        x  array of variables
     """
@@ -62,7 +63,7 @@ def Sdx(f, x):
     return dx / 3 * (f[0] + f[-1] + f_odd + f_even)
 
 
-@nb.njit
+@nb.njit(fastmath=True)
 def gauleg(n):
 
     x = np.zeros(n)
