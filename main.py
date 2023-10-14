@@ -1345,7 +1345,6 @@ if __name__ == "__main__":
         if 'fit_out' in globals():
             pd.DataFrame(fit_out[0]).to_csv(isotope_name + ' I(R, σ) table.csv')
             I_fit = f'(I = {fit_out[1]:.4g} {exp_file})'
-    
 
         file_name = (f'N = {len(q_out)} dt= {dt} {add_g}{add_p}'
                       + f'R_n= {r_neck * r0:.4g} with σ = {sigma_r_neck:.4g}'
