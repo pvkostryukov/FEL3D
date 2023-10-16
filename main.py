@@ -26,6 +26,7 @@ import pandas as pd
 import re
 
 import numba as nb
+import auxiliary_library as aux
 
 ###############################################################################
 ######################### DEFINING CONTANT VALUES #############################
@@ -681,7 +682,7 @@ def r_fit_procedure(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric,
                                                         sqrt_fric, V_macro,
                                                         V_micro, V, a_d, r, ar,
                                                         dt, N)
-        A_h_0 = np.round(.5 * A * (1 + q_into_alpha(q_out)))
+        A_h_0 = np.round(.5 * A * (1 + aux.q_into_alpha(q_out)))
         A_h = np.array([i_e for i_e in A_h_0 if 0 <= i_e <= A])
         I[idx] = dist_comparision(A_h, exp_dist)
         out[idx[0]][idx[1]] = (q_out.copy(), p_out.copy(),
@@ -727,7 +728,7 @@ def r_fit_procedure_mod(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric,
                                                             V_micro, V, a_d, r,
                                                             ar, dt, N)
 
-        A_h_0 = np.round(.5 * A * (1 + q_into_alpha(q_out)))
+        A_h_0 = np.round(.5 * A * (1 + aux.q_into_alpha(q_out)))
         A_h = np.array([i_e for i_e in A_h_0 if 0 <= i_e <= A])
         I[idx] = dist_comparision(A_h, exp_dist)
         out[idx[0]][idx[1]] = (q_out.copy(), p_out.copy(),
@@ -823,7 +824,7 @@ def fit_procedure(A, exp_file, dir_path):
                      if i != 0 else 0 for i, el in enumerate(dF_dq)])
         q_out = monte_carlo(starting_point, T, d2F_dq2, r_neck, sigma_r_neck,
                             dt, N, T_const=T_cons_var, a_t=a_t_var)[0]
-        A_h_0 = np.round(.5 * A * (1 + q_into_alpha(q_out)))
+        A_h_0 = np.round(.5 * A * (1 + aux.q_into_alpha(q_out)))
         A_h = np.array([i_e for i_e in A_h_0 if 0 <= i_e <= A])
         I[idx] = dist_comparision(A_h, exp_dist)
         pbar.update(1)
@@ -897,7 +898,7 @@ if __name__ == "__main__":
         Z, A, N, E_init, dt, starting_point, temp_ef, shell_ef,\
             t_star_enable, r_neck, sigma_r_neck, diffiuse_mult,\
                 exp_file, fit_of_T, gauss_flag, poisson_flag, elong_flag,\
-                    short_q2_flg, limit_cut_flag = isotope
+                    short_q2_flg, limit_cut_flag, info_full = isotope
 
         gauss_flag = False\
             if type(gauss_flag) != bool else gauss_flag and (not isnan(r_neck))
@@ -932,7 +933,7 @@ if __name__ == "__main__":
         fourier_file = 'fourier' + np.array(extensions[1])[fl_m][0]
         if fourier_file_prev != fourier_file:
             N_q, dq, qlim, m_0, f_0, bs, bc, bk, bf,\
-                r12, bx, vol, c, rn = fourier_file_data(fourier_file, path)
+                r12, bx, vol, c, rn = fourier_file_data(fourier_file)
             fourier_file_prev = fourier_file
 
             dim = len(dq)
@@ -1095,7 +1096,38 @@ if __name__ == "__main__":
                       + f'at ✓{diffiuse_mult**2:.2g} '
                       + f'{e0} {add_lim}' + I_fit
                       + '.xlsx') # &    q2 abs unlim randint _int_nck choice123 q2max25 q234bnd
+       
+        if type(info_full) == float or info_full in ('', ' '):
+            output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
+                            engine='openpyxl')
+            os.chdir(exact_place)
+            sys.exit()
 
-        output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
-                        engine='openpyxl')
+        if info_full in ('p', 'pre', 'precise'):
+            param_cf = np.array([aux.fcs_pythonic(q) for q in q_out])
+            Bf_q, Bs_q, Bc_q = param_cf[:, 0], param_cf[:, 1], param_cf[:, 2]
+            A_f_0 = np.round(A * Bf_q).astype(int)
+            Z_f_0 = np.round(Z * Bf_q).astype(int)
+            BCoul_q = param_cf[:, -2]
+            R12_q = r0 * param_cf[:, -1]
+        elif info_full in ('a','approx', 'approximate'):
+            Bf_q = .5 * (1 + aux.q_into_alpha(q_out))
+            # Bf_q = np.array({gh_ap3d(q, qlim, dq, N_q, bf) for q in q_out})
+            A_f_0 = np.round(A * Bf_q).astype(int)
+            Z_f_0 = np.round(Z * Bf_q).astype(int)
+            Bs_q = np.array([gh_ap3d(q, qlim, dq, N_q, bs) for q in q_out])
+            Bc_q = np.array([gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
+            BCoul_q = np.array([gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
+            R12_q = r0 * np.array([gh_ap3d(q, qlim, dq, N_q, r12) for q in q_out])
+        output_2 = pd.DataFrame({'Af_0': A_f_0,
+                                 'Zf_0': Z_f_0,
+                                 'Bf': Bf_q,
+                                 'Bs': Bs_q,
+                                 'Bc': Bc_q,
+                                 'BCoul': BCoul_q,
+                                 'R12': R12_q})
+        with pd.ExcelWriter(isotope_name + ' ' + file_name, engine='openpyxl') as wr:
+            output.to_excel(wr, sheet_name='Sheet1')
+            output_2.to_excel(wr, sheet_name='Sheet2')
+
         os.chdir(exact_place)
