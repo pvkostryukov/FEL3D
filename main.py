@@ -416,8 +416,6 @@ def ampl_definer_jit(q_start, d2V_dq2):
                      for i in range(dim)])
     ampl[ampl < 0] *= -1
     ampl = np.sqrt(ampl)
-    # mask = ampl > (dq / 2)
-    # ampl[mask] = dq[mask] / 2
     return ampl
 
 
@@ -442,58 +440,6 @@ def exit_condition(q, r_neck):
         return True
     # return r_neck_rad(q) <= r_neck
     return gh_ap3d(q, qlim, dq, N_q, rn) <= r_neck
-
-
-@nb.njit(fastmath=True, nogil=True)
-def exit_condition_discrete(q, r_neck, typeof):
-    if abs(gh_ap3d(q, qlim, dq, N_q, vol) - 1) >= 1e-3:
-        return True
-    ratio = gh_ap3d(q, qlim, dq, N_q, rn) / r_nucleon
-    if typeof == 'int':
-        int(ratio) <= r_neck
-    elif typeof == 'round':
-        round(ratio) <= r_neck
-    elif typeof == 'local':
-        return abs(ratio - r_neck) <= .1 * r_nucleon
-    return ratio <= r_neck
-
-
-@nb.njit(fastmath=True, nogil=True)
-def exit_condition_neck_Poisson(q, T, r_nucleon, sigma_r_neck,
-                                r_neck, is_poisson):
-    if round(gh_ap3d(q, qlim, dq, N_q, vol), 3) != 1:
-        return True
-    r_x = gh_ap3d(q, qlim, dq, N_q, rn)
-    if is_poisson:
-        return round(r_x / r_nucleon) <= np.random.poisson(T)
-    elif 0 == sigma_r_neck or isnan(sigma_r_neck):
-        return r_x <= r_neck
-    elif 0 < sigma_r_neck < 1:
-        return 1 / (1 + exp((r_x - r_neck) / sigma_r_neck)) >= uniform(0, 1)
-
-
-@nb.njit(fastmath=True, nogil=True)
-def exit_condition_neck_prob(q, sigma_r_neck, r_neck):
-    if round(gh_ap3d(q, qlim, dq, N_q, vol), 3) != 1:
-        return True
-    r_x = gh_ap3d(q, qlim, dq, N_q, rn)
-    if 0 < sigma_r_neck < 1:
-        return 1 / (1 + exp((r_x - r_neck) / sigma_r_neck)) >= uniform(0, 1)
-    return r_x <= r_neck
-
-
-@nb.njit(fastmath=True, nogil=True)
-def exit_condition_neck_prob_and_q4_line(q, sigma_r_neck, r_neck):
-    r_x = gh_ap3d(q, qlim, dq, N_q, rn)
-    border = q[2] <= (q[0] * .3 / 2.35 - 0.32765957446808514)
-    if round(gh_ap3d(q, qlim, dq, N_q, vol), 3) != 1:
-        return True and border
-    if 0 == sigma_r_neck or isnan(sigma_r_neck):
-        return (r_x <= r_neck) and border
-    elif 0 < sigma_r_neck < 1:
-        return 1 / (1 + exp((r_x - r_neck) / sigma_r_neck)) >= uniform(0, 1) and border
-    return 2 / (exp(sigma_r_neck * r_x) + exp( - sigma_r_neck * r_x)
-                ) >= uniform(0, 1) and border
 
 
 @nb.njit(fastmath=True, nogil=True)
@@ -767,8 +713,7 @@ def exp_res_aut(file_name, dir_path):
     text = file.readlines()
     file.close()
     os.chdir(exact_place)
-    reference = ' '.join(''.join([line for line in text if 'REF' in line]
-                                 ).split())[1:]
+
     data = [line for line in text if line[0] not in ('\n', '#')
             and not line[0].isalpha()]
     nucl_yield = []
@@ -910,8 +855,7 @@ if __name__ == "__main__":
         short_q2_flg = False if type(short_q2_flg) != bool else short_q2_flg
 
         if i != 0:
-            for func in [ampl_definer_jit,  exit_condition_neck_prob,
-                         trajectory_calc, gh_ap3d, gh_ap3d_tens]:
+            for func in [ampl_definer_jit, trajectory_calc, gh_ap3d, gh_ap3d_tens]:
                 func.recompile()
 
         diffiuse_mult = 1 if isnan(diffiuse_mult) else sqrt(diffiuse_mult)
@@ -931,27 +875,22 @@ if __name__ == "__main__":
                         )
         pot_file_ext  = np.array(extensions[0])[fl_m][0]
         fourier_file = 'fourier' + np.array(extensions[1])[fl_m][0]
+
         if fourier_file_prev != fourier_file:
             N_q, dq, qlim, m_0, f_0, bs, bc, bk, bf,\
                 r12, bx, vol, c, rn = fourier_file_data(fourier_file)
             fourier_file_prev = fourier_file
-
             dim = len(dq)
             q_grid = [np.linspace(qlim[0, i], qlim[1, i], N_q[i])
                       for i in range(dim)]
 
         if (Z, A) != (Z_prev, A_prev):
-
             r0 = 1.2 * A ** (1/3)
-
             r_nucleon = 1 / r0
-
             m_cf = 0.0113 * A ** (5 / 3)
             fric_cf = 0.275 * A ** (4 / 3)
-
             m = m_0.copy() * m_cf
             fric = f_0.copy() * fric_cf
-
             inv_m = np.zeros_like(m)
             sqrt_fric = np.zeros_like(fric)
             for idx, el in np.ndenumerate(bs):
@@ -995,7 +934,8 @@ if __name__ == "__main__":
         if type(starting_point) == str:
             is_number = rx.findall(''.join(starting_point))
             if 'from file' in starting_point:
-                starting_point = st_pnt_def(A, Z, starting_point.split('from file')[-1])
+                starting_point = st_pnt_def(A, Z,
+                                            starting_point.split('from file')[-1])
                 starting_point, start_idx,\
                     V_starting = st_pnt_checking(starting_point, V)
             elif starting_point in ['spont', 'spontaneus']:
@@ -1009,9 +949,9 @@ if __name__ == "__main__":
         else:
             print('Error! Wrong starting point input')
 
-        init_r_n = gh_ap3d(starting_point, qlim, dq, N_q, rn)
-
-        E_star, E_total = E_init, E_init + st_pnt_checking(st_pnt_def(A, Z), V)[-1] - ground_state
+        E_star = E_init 
+        E_total = E_init + st_pnt_checking(st_pnt_def(A, Z), V)[-1]\
+                    - ground_state
 
         if E_init < 0:
             print('Error! Invalid initial energy value.' +
@@ -1030,6 +970,7 @@ if __name__ == "__main__":
         temperature = sqrt(E_star / gh_ap3d(starting_point, qlim,
                                             dq, N_q, a_d)
                            )
+    
         sh = shell_correction(temperature, shell_ef, T_const, a_t)
         F = V_macro + sh *  V_micro - a_d * temperature ** 2
         dF_dq = np.array(np.gradient(F, dq[0], dq[1], dq[2]))
@@ -1039,7 +980,6 @@ if __name__ == "__main__":
                      if i != 0 else 0 for i, el in enumerate(dF_dq)])
         dF_d2F_vec_pom = np.array([el[tuple(start_idx)] / d2F_dq2[i][tuple(start_idx)]
                      if i != 0 else 0 for i, el in enumerate(dF_dq)])
-        # starting_point -= dF_d2F_vec
 
         dV_dq = np.array(np.gradient(V, dq[0], dq[1], dq[2]))
         d2V_dq2 = np.array([np.gradient(el, dq[0], dq[1], dq[2])[i]
@@ -1099,7 +1039,7 @@ if __name__ == "__main__":
        
         if type(info_full) == float or info_full in ('', ' '):
             output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
-                            engine='openpyxl')
+                            engine='openpyxl', index=False)
             os.chdir(exact_place)
             sys.exit()
 
@@ -1126,8 +1066,50 @@ if __name__ == "__main__":
                                  'Bc': Bc_q,
                                  'BCoul': BCoul_q,
                                  'R12': R12_q})
-        with pd.ExcelWriter(isotope_name + ' ' + file_name, engine='openpyxl') as wr:
-            output.to_excel(wr, sheet_name='Sheet1')
-            output_2.to_excel(wr, sheet_name='Sheet2')
+
+        A_f = np.concatenate((A - A_f_0, A_f_0))
+        Z_f = np.concatenate((Z - Z_f_0, Z_f_0))
+
+        Af_range = np.arange(A_f.min(), A_f.max() + 2, dtype=int)
+        Zf_range = np.arange(Z_f.min(), Z_f.max() + 2, dtype=int)
+
+        h, Af_range, Zf_range = np.histogram2d(A_f, Z_f, bins=(Af_range, Zf_range),
+                                            density=True)
+        h *= 2
+        Z_A = np.empty((1,3))
+        for i, el in enumerate(h.T):
+            el_mask = ~np.isclose(el, 0)
+            if any(el_mask):
+                Z_A = np.concatenate((Z_A,
+                                      np.array([[Zf_range[i], j, k]
+                                      for j,k in zip(Af_range[:-1][el_mask],
+                                                     el[el_mask])
+                                                ])
+                                      ))
+        Z_A = Z_A[1:]
+
+        output_3YA = pd.DataFrame({"Af": Af_range[:-1],
+                                   "Y(Af)": h.sum(axis=1)
+                                   }
+                                  )
+
+        output_3YZ = pd.DataFrame({"Zf": Zf_range[:-1],
+                                   "Y(Zf)": h.sum(axis=0)
+                                   }
+                                  )
+
+        output_3_YZA = pd.DataFrame({"Zf": Z_A.T[0].astype(int),
+                                     "Af": Z_A.T[1].astype(int),
+                                     "Y(Zf,Af)": Z_A.T[2]
+                                     }
+                                    )
+
+        with pd.ExcelWriter(isotope_name + ' ' + file_name,
+                            engine='openpyxl') as wr:
+            output.to_excel(wr, sheet_name='Sheet1', index=False)
+            output_2.to_excel(wr, sheet_name='Sheet2', index=False)
+            output_3YA.to_excel(wr, sheet_name='Sheet3', startcol=0, index=False)
+            output_3YZ.to_excel(wr, sheet_name='Sheet3', startcol=3, index=False)
+            output_3_YZA.to_excel(wr, sheet_name='Sheet3', startcol=6, index=False)
 
         os.chdir(exact_place)
