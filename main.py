@@ -6,7 +6,7 @@ Created on Wed Sep 22 12:20:49 2023
 """
 
 ###############################################################################
-########################## CALLING USED LIBRARIES #############################
+##################### CALLING USED LIBRARIES & PACKAGES #######################
 ###############################################################################
 
 import os
@@ -34,7 +34,7 @@ import auxiliary_library as aux
 
 rt2 = sqrt(2)
 nodes = 5
-nodes_range = np.arange(- (nodes // 2), nodes // 2 + 1).astype(int)
+h_nodes = nodes // 2
 γ = 1  # / 1.043218
 
 E_0 = 1.5
@@ -47,8 +47,10 @@ user_path = os.getcwd()
 OS = platform.system()
 
 ###############################################################################
-########################## D##EFINING SUB VALUES ##############################
+######################## FUNCTION DESCRIPTION SECTION #########################
 ###############################################################################
+
+##################### EXCTRACTION OF INPUT DATA VALUES ########################
 def nuc_definer(z_number):
     """Identifies by charge number the abbreviated name of the element"""
     lib_of_nuclei = {1: 'H', 2: 'He', 3: 'Li', 4: 'Be', 5: 'B', 6: 'C', 7: 'N',
@@ -218,21 +220,34 @@ def potential_reader(A, Z, N_q, dq, qlim, file_extension='.1'):
     V_micro = odd_axes_elements_adding(V_micro, q_idx)
 
     return V_macro, V_micro
-
 ###############################################################################
 
-@nb.njit(fastmath=True, nogil=True)
-def density(A, Z, bs, bk, bc):
-    """Defines density energy function from Nerlo-Pomorska paper"""
-    result = np.empty_like(bs)
-    for idx, el in np.ndenumerate(bs):
-        result[idx] = .092 * A + .036 * A ** (2 / 3) * el\
-            + .275 * A ** (1 / 3) * bk[idx] - .00146 * Z ** 2 / A ** (1 / 3)\
-            * bc[idx]
-    return result
+
+############################ INItIAL POINT CHECK ##############################
+def st_pnt_def(a_nuc, z_nuc, saddle_type: str = '2sad'):
+    """Extraction of saddle point from database sad_pnt_crds.xlsx"""
+    if 'sad_pnt_crds.xlsx' not in os.listdir():
+        print('There no library file on main folder.' +
+              ' The program will be aborted')
+        return sys.exit()
+    data = pd.read_excel('sad_pnt_crds.xlsx', sheet_name='Z'+str(int(z_nuc)),
+                         engine='openpyxl')
+    list_of_q = ['q' + str(i) for i in range(5 - len(dq), 5)]
+    type_of_point = '_2_min' if saddle_type == ' 2min' else '_2_sad'
+    list_of_q = [ i + type_of_point for i in list_of_q]
+    list_of_q.insert(0, 'A')
+    data = data.loc[:, list_of_q].to_numpy()
+    crd = data[np.where(a_nuc == data[:, 0]), 1:].flatten()
+    if np.size(crd) == 0:
+        print('There no information about this isotope.' +
+              ' The program will be aborted')
+        return sys.exit()
+    else:
+        return crd
 
 
 def spontaneus_st_point(V, gs, q_2sad_st):
+    """Defining initial point in case of spontaneus fission"""
     if q_grid[0][q_2sad_st[0]] < 0.65:
         q_2sad_st[0] = int(round((0.65 - q_grid[0][0]) / dq[0]))
     delta_eps = [.01, .05, 0.1]
@@ -254,29 +269,8 @@ def spontaneus_st_point(V, gs, q_2sad_st):
     return st_pnt, st_idx, V_st
 
 
-def st_pnt_def(a_nuc, z_nuc, saddle_type: str = '2sad'):
-    """Extraction of saddle point from database (sad_pnt_crds.xlsx)"""
-    if 'sad_pnt_crds.xlsx' not in os.listdir():
-        print('There no library file on main folder.' +
-              ' The program will be aborted')
-        return sys.exit()
-    data = pd.read_excel('sad_pnt_crds.xlsx', sheet_name='Z'+str(int(z_nuc)),
-                         engine='openpyxl')
-    list_of_q = ['q' + str(i) for i in range(5 - len(dq), 5)]
-    type_of_point = '_2_min' if saddle_type == ' 2min' else '_2_sad'
-    list_of_q = [ i + type_of_point for i in list_of_q]
-    list_of_q.insert(0, 'A')
-    data = data.loc[:, list_of_q].to_numpy()
-    crd = data[np.where(a_nuc == data[:, 0]), 1:].flatten()
-    if np.size(crd) == 0:
-        print('There no information about this isotope.' +
-              ' The program will be aborted')
-        return sys.exit()
-    else:
-        return crd
-
-
-def st_pnt_checking(st_point, V):
+def st_pnt_checking(st_point, V:np.array):
+    """Checks starting point position"""
     st_idx = np.array([round((el - qlim[0, i]) / dq[i])
                           for i, el in enumerate(st_point)]).astype(int)
     pretendents = np.array(np.where(V == V[tuple(st_idx)].min())).T\
@@ -289,37 +283,51 @@ def st_pnt_checking(st_point, V):
         st_idx = pretendents.copy()
         st_point = st_idx * dq + qlim[0]
     return st_point, st_idx, V[tuple(st_idx)]
-
-###############################################################################
 ###############################################################################
 
+
+###############################################################################
+@nb.njit(fastmath=True, nogil=True)
+def density(A, Z, bs:np.array, bk:np.array, bc:np.array)->np.array:
+    """Defines multidimentional grid values of density energy function defined
+       by Nerlo-Pomorska PRC 2006 paper"""
+    result = np.empty_like(bs)
+    for idx, el in np.ndenumerate(bs):
+        result[idx] = .092 * A + .036 * A ** (2 / 3) * el\
+            + .275 * A ** (1 / 3) * bk[idx] - .00146 * Z ** 2 / A ** (1 / 3)\
+            * bc[idx]
+    return result
+###############################################################################
+
+
+###################### GAUSS-HERMIT SUBROUINES SECTION ########################
 @nb.njit(nb.float64[:](nb.float64[:], nb.int64))
 def round_njt(x, decimals):
+    """JITted version of np.round function"""
     out = np.empty(x.shape[0])
     return np.round_(x, decimals, out)
 
 
 @nb.njit(fastmath=True, nogil=True)
 def gh_ap3d(q, qlim, dq, N_q, matrix):
-    """Calculate derivative by G-H method on 3d mesh."""
-    b = nodes // 2
-    lq = q.shape[0]
+    """Calculate derivative by G-H method on 3d mesh"""
     crd = (q - qlim[0]) / dq
-    crd_int = round_njt(crd, 0).astype(nb.int16)
-    f = np.zeros((lq, nodes))
+    crd_int = round_njt(crd, 0).astype(nb.intp)
+    f = np.zeros((dim, nodes))
+    for i in range(dim):
+        for j in range(nodes):
+            u2 = (γ * (crd[i] - (crd_int[i] + j - h_nodes))) ** 2
+            f[i, j] = exp(-u2) * (1.875 - 2.5 * u2 + .5 * u2**2) # (1.5 - u ** 2)
+        f[i] /= sum(f[i])
+    
     element = 0.
-    for i in range(lq):
-        for j in range(nodes):
-            u = γ * (crd[i] - (crd_int[i] + j - b))
-            f[i, j] = exp(-u**2) * (1.875 - 2.5 * u**2 + .5 * u**4) # (1.5 - u ** 2)
-        sum_f = np.sum(f[i])
-        f[i] /= sum_f
+
     for i in range(nodes):
-        ii = max(0, min(N_q[0] - 1, round(crd_int[0] + i - b)))
+        ii = max(0, min(N_q[0] - 1, crd_int[0] + i - h_nodes))
         for j in range(nodes):
-            jj = max(0, min(N_q[1] - 1, round(crd_int[1] + j - b)))
+            jj = max(0, min(N_q[1] - 1,  crd_int[1] + j - h_nodes))
             for k in range(nodes):
-                kk = max(0, min(N_q[2] - 1, round(crd_int[2] + k - b)))
+                kk = max(0, min(N_q[2] - 1, crd_int[2] + k - h_nodes))
                 element += f[0, i] * f[1, j] * f[2, k] * matrix[ii, jj, kk]
     return element
 
@@ -327,24 +335,23 @@ def gh_ap3d(q, qlim, dq, N_q, matrix):
 @nb.njit(fastmath=True, nogil=True)
 def gh_ap3d_tens(q, qlim, dq, N_q, matrix):
     """GH approximation procedure for tensor case on 3d mesh."""
-    b = nodes // 2
-    lq = q.shape[0]
     crd = (q - qlim[0]) / dq
     crd_int = round_njt(crd, 0).astype(np.intp)
-    f = np.zeros((lq, nodes))
-    tens = np.zeros((lq, lq))
-    for i in range(lq):
+    f = np.zeros((dim, nodes))
+    for i in range(dim):
         for j in range(nodes):
-            u = γ * (crd[i] - (crd_int[i] + j - b))
-            f[i, j] = exp(-u**2) * (1.875 - 2.5 * u**2 + .5 * u**4) #  (1.5 - u ** 2)
-        sum_f = np.sum(f[i])
-        f[i] /= sum_f
+            u2 = (γ * (crd[i] - (crd_int[i] + j - h_nodes))) ** 2
+            f[i, j] = exp(-u2) * (1.875 - 2.5 * u2 + .5 * u2**2) # (1.5 - u ** 2)
+        f[i] /= sum(f[i])
+
+    tens = np.zeros((dim, dim))
+
     for i in range(nodes):
-        ii = max(0, min(N_q[0] - 1, round(crd_int[0] + i - b)))
+        ii = max(0, min(N_q[0] - 1, crd_int[0] + i - h_nodes))
         for j in range(nodes):
-            jj = max(0, min(N_q[1] - 1, round(crd_int[1] + j - b)))
+            jj = max(0, min(N_q[1] - 1,  crd_int[1] + j - h_nodes))
             for k in range(nodes):
-                kk = max(0, min(N_q[2] - 1, round(crd_int[2] + k - b)))
+                kk = max(0, min(N_q[2] - 1, crd_int[2] + k - h_nodes))
                 tens += f[0, i] * f[1, j] * f[2, k] * matrix[ii, jj, kk]
     return tens
 
@@ -354,10 +361,15 @@ def gh_ap3d_set_without_dq(q, qlim, dq, N_q, ar_invM, ar_G, ar_sqrtG, ar_Vmac,
                            ar_Vmic, ar_den, ar_d_invM, ar_d_Vmac, ar_d_Vmic,
                            ar_d_den):
     """Calculate using by GH method set of needed values."""
-    b = nodes // 2
     crd = (q - qlim[0]) / dq
     crd_int = round_njt(crd, 0).astype(np.intp)
     f = np.zeros((dim, nodes))
+    for i in range(dim):
+        for j in range(nodes):
+            u2 = (γ * (crd[i] - (crd_int[i] + j - h_nodes))) ** 2
+            f[i, j] = exp(-u2) * (1.875 - 2.5 * u2 + .5 * u2**2) # (1.5 - u ** 2)
+        f[i] /= sum(f[i])
+    
     t_invM = np.zeros((dim, dim))
     t_dinvM = np.zeros((dim, dim, dim))
     t_G = np.zeros((dim, dim))
@@ -368,32 +380,29 @@ def gh_ap3d_set_without_dq(q, qlim, dq, N_q, ar_invM, ar_G, ar_sqrtG, ar_Vmac,
     v_dVmac = np.zeros(dim)
     v_dVmic = np.zeros(dim)
     d_el_den = np.zeros(dim)
-    for i in range(dim):
+
+    for i in range(nodes):
+        ii = max(0, min(N_q[0] - 1, crd_int[0] + i - h_nodes))
         for j in range(nodes):
-            u = γ * (crd[i] - (crd_int[i] + j - b))
-            e = exp(- u ** 2)
-            f[i, j] = e * (1.875 - 2.5 * u**2 + .5 * u**4) #  (1.5 - u ** 2)
-        f[i] /= f[i].sum()
+            jj = max(0, min(N_q[1] - 1,  crd_int[1] + j - h_nodes))
+            for k in range(nodes):
+                kk = max(0, min(N_q[2] - 1, crd_int[2] + k - h_nodes))
 
-    for i, j, k in np.ndindex((nodes, nodes, nodes)):
-        ii = max(0, min(N_q[0] - 1, round(crd_int[0] + i - b)))
-        jj = max(0, min(N_q[1] - 1, round(crd_int[1] + j - b)))
-        kk = max(0, min(N_q[2] - 1, round(crd_int[2] + k - b)))
+                ff = f[0, i] * f[1, j] * f[2, k]
 
-        ff = f[0, i] * f[1, j] * f[2, k]
+                t_G += ff * ar_G[ii, jj, kk]
+                el_den += ff * ar_den[ii, jj, kk]
+                t_invM += ff * ar_invM[ii, jj, kk]
+                t_rootG += ff * ar_sqrtG[ii, jj, kk]
+                el_Vmac += ff * ar_Vmac[ii, jj, kk]
+                el_Vmic += ff * ar_Vmic[ii, jj, kk]
+                d_el_den += ff * ar_d_den[:, ii, jj, kk]
+                v_dVmac += ff * ar_d_Vmac[:, ii, jj, kk]
+                v_dVmic += ff * ar_d_Vmic[:, ii, jj, kk]
+                t_dinvM += ff * ar_d_invM[:, ii, jj, kk]
 
-        t_G += ff * ar_G[ii, jj, kk]
-        el_den += ff * ar_den[ii, jj, kk]
-        t_invM += ff * ar_invM[ii, jj, kk]
-        t_rootG += ff * ar_sqrtG[ii, jj, kk]
-        el_Vmac += ff * ar_Vmac[ii, jj, kk]
-        el_Vmic += ff * ar_Vmic[ii, jj, kk]
-        d_el_den += ff * ar_d_den[:, ii, jj, kk]
-        v_dVmac += ff * ar_d_Vmac[:, ii, jj, kk]
-        v_dVmic += ff * ar_d_Vmic[:, ii, jj, kk]
-        t_dinvM += ff * ar_d_invM[:, ii, jj, kk]
     return t_invM, t_G, t_rootG, el_Vmac, el_Vmic, el_den, d_el_den, t_dinvM,\
-            v_dVmac, v_dVmic
+           v_dVmac, v_dVmic
 
 ###############################################################################
 ###############################################################################
@@ -425,20 +434,9 @@ def rand_function(dimentions: int):
 
 
 @nb.njit(fastmath=True, nogil=True)
-def temp_check(temp, a, dt, incr_q, g, sqrt_g, dimension):
-    check = -1
-    while check < 0:
-        rand_func_vec = ξ(0, rt2, dimension)
-        check = 2 * dt * (g @ dq - sqrt_g @ rand_func_vec) @ dq / a
-    temp = .5 * (temp + sqrt(temp ** 2 + check))
-    return temp, rand_func_vec
-
-
-@nb.njit(fastmath=True, nogil=True)
 def exit_condition(q, r_neck):
     if abs(gh_ap3d(q, qlim, dq, N_q, vol) - 1) >= 1e-3:
         return True
-    # return r_neck_rad(q) <= r_neck
     return gh_ap3d(q, qlim, dq, N_q, rn) <= r_neck
 
 
@@ -448,11 +446,7 @@ def q1_def(q_start, V_st, inv_m, ampl, ql):
     if q_start[0] > 0.5:
         while E_kin < 0:
             ξ1 = ξ(0, .5, dim); ξ1[0] = abs(ξ1[0])
-            q = q_start + ampl * ξ1
-            # up = q > ql[1]
-            # q[up] = ql[1][up]
-            # bot = q < ql[0]
-            # q[bot] = ql[0][bot]
+            q = q_start + ξ1 * ampl
             if np.any(ql[0] > q) or np.any(ql[1] < q):
                 continue
             E_kin = gh_ap3d(q, qlim, dq, N_q, V_st)
@@ -474,14 +468,14 @@ def temp_def(temp, p, E_total, i_m, a, V_mac, V_mic, shell):
     E_kin = .5 * i_m @ p @ p 
     E_st = E_total - (E_kin + V_mac + V_mic * shell)
     if E_st < 0:
-        E_k = E_kin
-        E_kin = E_k + E_st - a * temp ** 2
-        p *= sqrt(E_kin / .5 * i_m @ p @ p) if E_kin > 0 else 0
-    temp = max(temp, sqrt(max(E_st / a, 1e-16)))
+        E_kin_new = E_kin + E_st - a * temp ** 2 
+        p *= sqrt(E_kin_new / E_kin) if E_kin_new > 0 else 0
+    temp2 = max(E_st / a, 1e-16)
+    temp = max(temp, sqrt(temp2))
     t_star = sqrt(E_0 / tanh(E_0 / temp)) if t_star_enable else sqrt(temp)
     shell = shell_correction(temp, shell_ef, T_const, a_t)
     g_coef = friction_temp_correction(temp, temp_ef)
-    return temp, t_star, shell, g_coef, E_st, p
+    return temp, temp2, t_star, shell, g_coef, E_st, p
 
 ###############################################################################
 ###############################################################################
@@ -491,14 +485,13 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
                     V_micro, V_s2, a_d, r_neck, sigma_r_neck, temp_ef,
                     shell_ef, t_star_enable, dt, sqrt_dt, idt, step_limit,
                     ql, ampl):
-    """Caclulates each trajectory of Monte Carlo processes"""
+    """Caclulates trajectory of Monte Carlo processes"""
     dim = len(q_start)
     temp = temperature
     time = 0
-    real_time = 0
-    relax_count = 0
     shell = shell_correction(temp, shell_ef, T_const, a_t)
     dp = np.zeros(dim)
+    q2_max = qlim[1, 0]
 
     q, p = q1_def(q_start, V_s2, inv_m, ampl, ql)
 
@@ -507,32 +500,24 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
                      d_a_d_dq)
 
     r_neck_traj = abs(ξ(r_neck, sigma_r_neck)) if gauss_flag else r_neck
-
-    q2_max = qlim[1, 0]
-    t_star = 1
     
     while q_start[0] <= q[0]:
 
         i_m, g, sqrt_g, V_mac, V_mic, a, d_a, d_i_m,\
              dV_mac, dV_mic = gh_ap3d_set_without_dq(q, *all_data_pack)
-                
+
         if time % idt == 0:
-            E_st = E_total - (.5 * i_m @ p @ p + V_mac + V_mic * shell)
-            temp = max(temp, sqrt(max(E_st, 1e-16) / a))
-            t_star = sqrt(E_0 / tanh(E_0 / temp)) if t_star_enable else sqrt(temp)
-            shell = shell_correction(temp, shell_ef, T_const, a_t)
-            g_coef = friction_temp_correction(temp, temp_ef)
+            temp, temp2, t_star, shell, g_coef, E_st, p =\
+                temp_def(temp, p, E_total, i_m, a, V_mac, V_mic, shell)
             if poisson_flag:
                 r_neck_traj = np.random.poisson(temp / 5) * r_nucleon
         g *= g_coef
         sqrt_g *= sqrt(g_coef)
 
-        lg_amp = np.array([sqrt_g[i] @ rand_function(dim) for i in range(dim)])
-        dp = lg_amp * sqrt_dt * t_star
-        dp -= dt * (dV_mac + shell * dV_mic - d_a * temp ** 2
-                    + np.array([(.5 * d_i_m[i] @ p + i_m @ g[i]) @ p
-                                for i in range(dim)])
-                    )
+        dp = np.array([sqrt_g[i].dot(rand_function(dim)) * sqrt_dt * t_star
+                       - (.5 * d_i_m[i] @ p + i_m @ g[i]) @ p * dt
+                       for i in range(dim)])
+        dp -= dt * (dV_mac + shell * dV_mic - d_a * temp2)
         p += dp
         Δq = i_m @ (p - dp / 2)
         q += Δq * dt
@@ -551,14 +536,14 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
             if limit_cut_flag:
                 break
             q[0] = q2_max
-            return q, p, real_time, temp_def(temp, p, E_total, i_m, a, V_mac,
+            return q, p, time * dt, temp_def(temp, p, E_total, i_m, a, V_mac,
                                              V_mic, shell)[0], q[2] < 0
         elif exit_condition(q, r_neck_traj) and q[0] > 1.5:
             temp = temp_def(temp, p, E_total, i_m, a, V_mac, V_mic, shell)[0]
-            return q, p, real_time, temp, temperature + 0.1 < temp
+            return q, p, time * dt, temp, temperature + 0.1 < temp
 
-    return q, p, real_time, temp_def(temp, p, E_total, i_m, a,
-                                     V_mac, V_mic, shell)[0], False
+    return q, p, time * dt, temp_def(temp, p, E_total, i_m, a, V_mac,
+                                     V_mic, shell)[0], False
 
 
 def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
@@ -583,24 +568,23 @@ def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
     ql[1][ql[1] > qlim[1]] = qlim[1][ql[1] > qlim[1]]
     V_st = V_starting - V - E_0
 
-    while traj < N:
-        q, p, t, temp_out,\
-        correct_traj = trajectory_calc(q_start, temperature, inv_m, fric,
+    for i in range(N):
+        correct_traj = False
+        while not correct_traj:
+            q, p, t, temp_out,\
+            correct_traj = trajectory_calc(q_start, temperature, inv_m, fric,
                                         sqrt_fric, V_macro, V_micro, V_st,
                                         a_d, r_neck, sigma_r_neck, temp_ef,
                                         shell_ef, t_star_enable, *t_val, ql, 
                                         ampl)
+            wrong_count += 0 if correct_traj else 1
+        traj_crd_out[i] = q.copy()
+        traj_p_out[i] = p.copy()
+        traj_time[i] = t
+        traj_temp[i] = temp_out
+        if flag_bar:
+            pbar.update(1)
 
-        if correct_traj:
-            traj_crd_out[traj] = q.copy()
-            traj_p_out[traj] = p.copy()
-            traj_time[traj] = t
-            traj_temp[traj] = temp_out
-            traj += 1
-            if flag_bar:
-                pbar.update(1)
-        else:
-            wrong_count += 1
     if flag_bar:
         pbar.close()
         print()
@@ -624,10 +608,9 @@ def r_fit_procedure(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric,
     for idx, (r_n, a_r_n) in zip(np.ndindex(I.shape), np.nditer(var_grid)):
         r, ar = float(r_n), float(a_r_n)
         q_out, p_out, traj_time, temp_out = monte_carlo(q_start, temperature,
-                                                        d2F_dq2, inv_m, fric,
-                                                        sqrt_fric, V_macro,
-                                                        V_micro, V, a_d, r, ar,
-                                                        dt, N)
+                                                        inv_m, fric, sqrt_fric,
+                                                        V_macro, V_micro, V, 
+                                                        a_d, r, ar, dt, N)
         A_h_0 = np.round(.5 * A * (1 + aux.q_into_alpha(q_out)))
         A_h = np.array([i_e for i_e in A_h_0 if 0 <= i_e <= A])
         I[idx] = dist_comparision(A_h, exp_dist)
@@ -789,39 +772,13 @@ def fit_procedure(A, exp_file, dir_path):
     return I, I.min(), (t_c[loc[1]], a_t[loc[0]])
 
 ###############################################################################
-
-def df_dq_ap(q, df):
-    if len(q) != len(df):
-        print(f"Wrong dimentions q has {len(q)} dim, dV - {len(df)}")
-        return
-    return np.array([df[i](q)[0] for i in range(len(q))])
-
-
-def vec_func_ap(q, vec_func):
-    return np.array([i(q) for i in vec_func])
-
-
-def tens_func_ap(q, tens_func):
-    tensor = np.zeros((dim, dim))
-    for idx, el in np.ndenumerate(tens_func):
-        tensor[idx] = el(q)
-    return tensor
-
-
-def d_tens_func(q, d_tens_f):
-    d_tens = np.zeros((dim,) * dim)
-    for idx, el in np.ndenumerate(d_tens_f):
-        d_tens[idx] = el(q)
-    return d_tens
-
-###############################################################################
 ###############################################################################
 ###############################################################################
 
 if __name__ == "__main__":
 
     if 'input.xlsx' not in os.listdir():
-        print('Error! There no input file')
+        print('Error: there no input file!')
         sys.exit()
     print('Calculations starts: ' +
           datetime.datetime.today().strftime("%d-%m-%Y %H:%M:%S"))
@@ -973,13 +930,6 @@ if __name__ == "__main__":
     
         sh = shell_correction(temperature, shell_ef, T_const, a_t)
         F = V_macro + sh *  V_micro - a_d * temperature ** 2
-        dF_dq = np.array(np.gradient(F, dq[0], dq[1], dq[2]))
-        d2F_dq2 = np.array([np.gradient(el, dq[0], dq[1], dq[2])[i]
-                            for i, el in enumerate(dF_dq)])
-        dF_d2F_vec = np.array([el[tuple(start_idx)] / d2F_dq2[i][tuple(start_idx)]
-                     if i != 0 else 0 for i, el in enumerate(dF_dq)])
-        dF_d2F_vec_pom = np.array([el[tuple(start_idx)] / d2F_dq2[i][tuple(start_idx)]
-                     if i != 0 else 0 for i, el in enumerate(dF_dq)])
 
         dV_dq = np.array(np.gradient(V, dq[0], dq[1], dq[2]))
         d2V_dq2 = np.array([np.gradient(el, dq[0], dq[1], dq[2])[i]
