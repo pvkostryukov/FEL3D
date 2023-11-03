@@ -293,9 +293,9 @@ def density(A, Z, bs:np.array, bk:np.array, bc:np.array)->np.array:
        by Nerlo-Pomorska PRC 2006 paper"""
     result = np.empty_like(bs)
     for idx, el in np.ndenumerate(bs):
-        result[idx] = .092 * A + .036 * A ** (2 / 3) * el\
-            + .275 * A ** (1 / 3) * bk[idx] - .00146 * Z ** 2 / A ** (1 / 3)\
-            * bc[idx]
+        result[idx] = .092 * A + .036 * A**(2 / 3) * el\
+                      + .275 * A**(1 / 3) * bk[idx]\
+                      - .00146 * Z**2 / A**(1 / 3) * bc[idx]
     return result
 ###############################################################################
 

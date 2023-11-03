@@ -12,14 +12,13 @@ import numba as nb
 a2_0 = 1.0320491
 a4_0 = .03822404
 a6_0 = .00825639
-a8_0 = 0.00300889
+a8_0 = .00300889
 ###############################################################################
 m_unit = 939.5656
 h_bar_c = 197.327
 R_cf = 1.2
 
 mtens_coef = 75 / pi * m_unit / h_bar_c ** 2 * R_cf ** 2
-
 
 ############################# SOME MATH FUNCTIONS #############################
 
@@ -691,13 +690,6 @@ def fcs_short(q):
 
     bw, bf, R12, vol, rn, z_neck, z_neck_ind, z_0, z_sh = bcong_Dobr(z, ρ_2, a,
                                                                      z_sh, z_0)
-    # bw, bf, r12, vol, rn, _ = bcong_Dobr(z, ρ_2, a, z_sh, z_0)
-    # if (vol - 1) > 1e-5:
-    #     r_0 = 1 / vol ** (1/3)
-    #     z_0 = c * r_0
-    #     z_sh *= r_0
-    #     z = np.linspace(z_sh - z_0, z_0 + z_sh, N)
-    #     ρ_2 = ρ2_jit(a, z, z_sh, z_0, True)
 
 #   Nonaxiallity parameter
     η = a[0]
