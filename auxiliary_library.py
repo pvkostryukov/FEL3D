@@ -1,3 +1,7 @@
+###############################################################################
+##################### CALLING USED LIBRARIES & PACKAGES #######################
+###############################################################################
+
 import os
 import sys
 import math
@@ -151,29 +155,11 @@ def q_to_a(q):
 
 
 @nb.njit(fastmath=True)
-def q_into_alpha(q: np.array):
-    """
-    Convertion q coordinate into mass asymmetri coefficient via formula (A23) from
-    C. Schmitt et al. (PRC 95, 034612 (2017)) paper
-    """
-    q_set = len(q.shape)
-    if q_set == 1:
-        q = q.reshape((1, len(q)))
-    if q_set >= 1:
-        # q = q.reshape((1, len(q))) if q_set == 1 else q.copy()
-        a = np.zeros((len(q), 6))
-        a[:, 2] = .5 * a2_0 * (np.sqrt(q[:, 0] ** 2 + 4) - q[:, 0])
-        a[:, 3] = q[:, 1]
-        a[:, 4] = q[:, 2] - np.sqrt(a4_0 ** 2 + q[:, 0] ** 2 / 81)
-        a[:, 5] = (q[:, 0] - 2) * a[:, 3] * .1
-        return a[:, 3] / (a[:, 2] - a[:, 4] / 3) * (1 - 2*(a[:, 2] + a[:, 4])
-                                                      / (a[:, 2] + 9*a[:, 4]))
-    else:
-        print('Error in dimentions of q vector coordinate')
-
-
-@nb.njit(fastmath=True)
 def a_to_q(a):
+    """
+        Inverse procedure to q_to_a() function for the 3D vector q
+    """
+
     dim = len(a)
 
     if dim >= 3:
@@ -217,6 +203,28 @@ def a_trfrm(ρ_2, z, n_ind, R, lr, q_flag):
         cos_sin[i] = np.cos(u * el) if i % 2 == 0 else np.sin(u * el)
     a_new[1:] = np.array([Sdx(ρ_2_s * el, u) for el in cos_sin]) / R ** 2
     return a_to_q(a_new) if q_flag else a_new
+
+
+@nb.njit(fastmath=True)
+def q_into_alpha(q: np.array):
+    """
+        Convertion q coordinate into mass asymmetri coefficient via formula (A23)
+        from Schmitt et al. [PRC 95, 034612 (2017)] paper
+    """
+    q_set = len(q.shape)
+    if q_set == 1:
+        q = q.reshape((1, len(q)))
+    if q_set >= 1:
+        # q = q.reshape((1, len(q))) if q_set == 1 else q.copy()
+        a = np.zeros((len(q), 6))
+        a[:, 2] = .5 * a2_0 * (np.sqrt(q[:, 0] ** 2 + 4) - q[:, 0])
+        a[:, 3] = q[:, 1]
+        a[:, 4] = q[:, 2] - np.sqrt(a4_0 ** 2 + q[:, 0] ** 2 / 81)
+        a[:, 5] = (q[:, 0] - 2) * a[:, 3] * .1
+        return a[:, 3] / (a[:, 2] - a[:, 4] / 3) * (1 - 2*(a[:, 2] + a[:, 4])
+                                                      / (a[:, 2] + 9*a[:, 4]))
+    else:
+        print('Error in dimentions of q vector coordinate')
 
 
 @nb.njit(fastmath=True)
