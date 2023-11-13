@@ -220,16 +220,11 @@ def Wskpf_em_α_noZ(q, A, Z, E):
     z_ar = (z_full, z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
     ρ_ar = (ρ2_full, ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
 
-    # z_ar = (np.linspace(z_s - c, z_full[z_nck_ind], N),
-    #         np.linspace(z_full[z_nck_ind + 1], z_s + c, N)) 
-
     α2 = np.zeros(3)
     z_c_ar = np.zeros(3)
 
     for i in range(3):
         z, ρ_2 = z_ar[i], ρ_ar[i]
-        # aux.ρ2(a, z_ar[ii - 1], z_s, c, True) if ii != 0\
-        #     else (z_full, ρ2_full)
         ρ = np.sqrt(ρ_2)
         z_c = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
         z_c_ar[i] = z_c
@@ -274,21 +269,18 @@ def Wskpf_em_α_noZ(q, A, Z, E):
 
     E_st = [List.empty_list(float64), List.empty_list(float64)]
     e_n = [List.empty_list(float64), List.empty_list(float64)]
-    
-    
-    return e_n[0][0]
 
     for i in range(2):
         ΔB = cf[:, i] - np.ones(3)
         ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
-        E_st[i].append(ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
-                        + E_star_ff[i]) # T ** 2 * density(A_f[i], Z_f[i], *cf[:, i]))
-        while E_st[i] > ΔM_n:
-            ϵ_n_max = E_st[i][-1] - ΔM_n
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
             ϵ_n = np.linspace(0, ϵ_n_max, N)
             dϵ = ϵ_n[1]
             ϵ_n[1:] -= dϵ / 2
-            coef = dϵ * fact / den_lvl_float(E_st[i][-1], A_f[i], Z_f[i])
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
 
             A_f[i] -= 1
             A13 = A_f[i] ** (1 / 3)
@@ -306,22 +298,28 @@ def Wskpf_em_α_noZ(q, A, Z, E):
                 ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
             e_n[i].append(ϵ_neut)
             mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
-            E_st[i].append(ϵ_n_max - e_n[i] + mass_ex)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
 
-    return LF_Z, LF_A_prime, A_f[0], LF_b_cf,\
-             RF_Z, RF_A_prime, A_f[1], RF_b_cf,\
-             CN_b_cf, α2
-
-
-    out = [[LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0]],
-            [RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1]],
-            CN_b_cf, α2]
-
-
-
-    return [LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0]],\
-           [RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1]],\
+    return LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0],\
+           RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1],\
            CN_b_cf, α2
+
+
+def output_to_dict(LF_Z, LF_A_prime, LF_A_rest, LF_b_cf, LF_E_st, LF_e_n,
+                   RF_Z, RF_A_prime, RF_A_rest, RF_b_cf, RF_E_st, RF_e_n,
+                   CN_b_cf, α2):
+    LF_dict, RF_dict = out_dict.copy(), out_dict.copy()
+    input1 = (LF_Z, LF_A_prime, LF_A_rest, LF_b_cf, LF_E_st, LF_e_n)
+    input2 = (RF_Z, RF_A_prime, RF_A_rest, RF_b_cf, RF_E_st, RF_e_n)
+    
+    for key, el1, el2 in zip(out_dict.keys(), input1, input2):
+        if key in ['E*', 'e_n']:
+            el1, el2 = list(el1), list(el2)
+        LF_dict[key] = el1
+        RF_dict[key] = el2
+    
+    return [LF_dict, RF_dict, [CN_b_cf, α2]]
 
 
 @nb.njit(fastmath=True, nogil=True)
@@ -348,6 +346,135 @@ def ΔE_def(A, Z, B_coul, B_surf, B_curv, m_data):
 
 
 
+@nb.njit(fastmath=True, nogil=True)
+def Wskpf_em_α_Z_eq(q, A, Z, T):
+
+    N = 500
+    
+    R0 = 1.2 * A ** (1 / 3)
+
+    a = aux.q_to_a(q)
+    z_s, c = aux.c_z(a)
+
+    z_full = np.linspace(z_s - c, z_s + c, 2 * N)
+    z_full, ρ2_full = aux.ρ2_jit(a, z_full, z_s, c, True)
+
+    z_nck_ind, _ = fast_neck_finder(ρ2_full, a, z_full, z_s, c)
+
+    z_ar = (z_full, z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
+    ρ_ar = (ρ2_full, ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
+
+    α2 = np.zeros(3)
+    z_c_ar = np.zeros(3)
+
+    for i in range(3):
+        z, ρ_2 = z_ar[i], ρ_ar[i]
+        ρ = np.sqrt(ρ_2)
+        z_c = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
+        z_c_ar[i] = z_c
+        dif_z = z - z_c
+        R = np.sqrt(ρ ** 2 + dif_z ** 2)
+        vol = .75 * aux.Sdx(ρ_2, z)
+        R_0_f = vol ** (1 / 3)
+        
+        integrand = (R/R_0_f - 1) ** 2 * (ρ_2 - dif_z * aux.dρ2_jit(a, z, z_s,
+                                                                    c, 1)
+                                          ) / R ** 3
+        α2[i] = 2 * pi * aux.Sdx(integrand, z)
+    
+    vrat = np.array([1 - vol, vol])
+    α2 /= R0
+    R12 = R0 * (z_c_ar[2] - z_c_ar[1])
+    
+    bs, bk, bc = B_surf(α2[0]), B_curv(α2[0]), B_coul(α2[0])
+    CN_b_cf = np.array((bc, bs, bk))
+
+    bs1, bk1, bc1 = B_surf(α2[1]), B_curv(α2[1]), B_coul(α2[1])
+    LF_b_cf = np.array((bc1, bs1, bk1))
+
+    bs2, bk2, bc2 = B_surf(α2[2]), B_curv(α2[2]), B_coul(α2[2])
+    RF_b_cf = np.array((bc2, bs2, bk2))
+
+    cf = np.array([[bc1, bc2], [bs1, bs2], [bk1, bk2]])
+
+    A_f = np.round(vrat[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_h = max(A_f)
+
+    hi = np.where(A_f == A_h)[0][0]
+    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
+
+    Z_f = int(vrat[hi] * Z)
+      
+    l = 6
+    Z_range = np.arange(Z_f - l, Z_f + l, dtype=int64)
+
+    E_diff = np.array([LSD(A_f[hi], z_f, α2[hi+1])
+                       + LSD(A_f[li], Z - z_f, α2[li + 1])
+                       + 1.44 * z_f * (Z - z_f) / R12 - LSD(A, Z)
+                       for z_f in Z_range])
+
+    min_E_diff = min(E_diff)
+    
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
+    int_Z_distr = Z_distr.cumsum()
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
+
+    Z_f = int(Z_range[int_Z_distr > rdnum][0])
+
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
+    Z_f = Z_new.copy()
+       
+
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
+
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+    
+    LF_Z, RF_Z = Z_f.copy()
+    LF_A_prime, RF_A_prime = A_f.copy()
+
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
+
+    for i in range(2):
+        ΔB = cf[:, i] - np.ones(3)
+        ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
+            ϵ_n = np.linspace(0, ϵ_n_max, N)
+            dϵ = ϵ_n[1]
+            ϵ_n[1:] -= dϵ / 2
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
+            f *= coef
+            g = f.cumsum()
+            grn = random.uniform(0, 1) * g[-1]
+            if grn < g[1]:
+                ϵ_neut = grn / g[0] * dϵ
+            else:
+                j = 2
+                while g[j] < grn and j < N - 1:
+                    j += 1
+                ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+
+    return LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0],\
+           RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1],\
+           CN_b_cf, α2
+
+
 
 def Wskpf_em_α_POM(q, A, Z, T, qlim, dq, N_q, R12, α2, vol):
 
@@ -370,7 +497,7 @@ def Wskpf_em_α_POM(q, A, Z, T, qlim, dq, N_q, R12, α2, vol):
     li = np.array((0, 1))[np.array((0, 1)) != hi][0]
 
     Z_f = int(vrat[hi] * Z)
-    l = 4
+    l = 6
     Z_range = np.arange(Z_f - l, Z_f + l)
 
     E_diff = np.array([LSD(A_f[hi], z_f, α_2[hi]) + LSD(A_f[li], Z - z_f,
@@ -380,9 +507,9 @@ def Wskpf_em_α_POM(q, A, Z, T, qlim, dq, N_q, R12, α2, vol):
 
     min_E_diff = min(E_diff)
 
-    E0 = 5
+    E_Wig = 5
 
-    Z_distr = np.exp(-((E_diff - min_E_diff) / E0) ** 2)
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
     int_Z_distr = Z_distr.cumsum()
     int_Z_distr /= int_Z_distr[-1]
     rdnum = random.uniform(0, 1)
@@ -488,9 +615,9 @@ def Wskpf_em_α(q, A, Z, T, qlim, dq, N_q, R12, α2, vol):
 
     min_E_diff = min(E_diff)
 
-    E0 = 5
+    E_Wig = 5
 
-    Z_distr = np.exp(-((E_diff - min_E_diff) / E0) ** 2)
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
     int_Z_distr = Z_distr.cumsum()
     int_Z_distr /= int_Z_distr[-1]
     random.seed()
@@ -601,9 +728,9 @@ def Wskpf_em_def(q, A, Z, T, qlim, dq, N_q, R12, vol):
 
     min_E_diff = min(E_diff)                            
 
-    E0 = 5
+    E_Wig = 5
 
-    Z_distr = np.exp(-((E_diff - min_E_diff) / E0) ** 2)
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
     int_Z_distr = Z_distr.cumsum()
     rdnum = random.uniform(0, 1) * int_Z_distr[-1]
 
@@ -789,9 +916,9 @@ def Wskpf_em_def_new(q, A, Z, T):
 
     min_E_diff = min(E_diff)
 
-    E0 = 5
+    E_Wig = 5
 
-    Z_distr = np.exp(-((E_diff - min_E_diff) / E0) ** 2)
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
 
     int_Z_distr = Z_distr.cumsum()
     rdnum = random.uniform(0, 1) * int_Z_distr[-1]
@@ -893,6 +1020,9 @@ def Wskpf_em_def_new(q, A, Z, T):
     # sns.histplot(g/g[-1], binwidth=.05, stat='probability')
 
     return out
+
+
+
 
 
 @nb.njit(fastmath=True, nogil=True)
@@ -1014,6 +1144,9 @@ mass_data_np = mass_data.to_numpy()
 ΔM_p = mass_excess(1, 1, mass_data)
 ΔM_α = mass_excess(4, 2, mass_data)
 
+out_dict = {'Z': '', 'A_prime': '', 'A_rest': '', 'B_cf': '',
+            'E*': '', 'e_n': ''}
+
 # colspecs = [(0, 3), (4, 7), (18, 30)]
 # data_nubase = pd.read_fwf('nubase_mas20.txt', colspecs=colspecs,
 #                           names=['A', 'Z', 'M_EXS']).dropna()
@@ -1022,6 +1155,8 @@ mass_data_np = mass_data.to_numpy()
 # mass_data_NUB_np = data_nubase.to_numpy()
 
 n_emission = 6
+
+E_Wig = 5
 
 E_0 = 1
 E_γ_thres = 5
