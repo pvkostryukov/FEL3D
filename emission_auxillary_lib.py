@@ -18,9 +18,33 @@ from numba.typed import List
 from numba.types import float64, int64
 import auxiliary_library as aux
 
+
+# from main import dim, nodes, h_nodes, γ
+from main import gh_ap3d as gh3d
+
 ###############################################################################
 ###############################################################################
 ###############################################################################
+
+from constants import *
+
+# m_unit = 939.5656
+# h_bar_c = 197.327
+# sqrt_pi = 1.7724538509055159
+# pi2 = 9.869604401089358
+
+# fact = 2 * m_unit / (pi2 * h_bar_c ** 2)
+
+# out_dict = {'Z': '', 'A_prime': '', 'A_rest': '', 'B_cf': '',
+#             'E*': '', 'e_n': ''}
+# n_emission = 6
+
+# E_Wig = 5
+# E_γ_thres = 5
+
+###############################################################################
+###############################################################################
+
 
 @nb.njit(fastmath=True, nogil=True)
 def B_surf(alpha2: float):
@@ -70,7 +94,7 @@ def LSD(A, Z, alpha2 = 0):
     # return z_terms + curv_terms - 10 * exp(- 4.2 * abs(I)) + odd_term(A, Z)
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def odd_term(A, Z):
     """
         Calculates the even-odd term in LSD-formula
@@ -79,11 +103,11 @@ def odd_term(A, Z):
     n_odd_fl, z_odd_fl, eq_fl =  N % 2, Z % 2, Z == N        
     if eq_fl:
         return (4.8 / Z ** (1/3) + 4.8 / N ** (1/3)
-                 - 6.6 / A ** (2/3) + 30 / A) if n_odd_fl else 0
+                  - 6.6 / A ** (2/3) + 30 / A) if n_odd_fl else 0
     else:
         if n_odd_fl:
             return (4.8 / Z ** (1/3) + 4.8 / N ** (1/3)
-                     - 6.6 / A ** (2/3)) if z_odd_fl else 4.8 / N ** (1/3)
+                      - 6.6 / A ** (2/3)) if z_odd_fl else 4.8 / N ** (1/3)
         return 4.8 / Z ** (1/3) if z_odd_fl else 0
 
     # if z_odd_fl and eq_fl:
@@ -98,20 +122,32 @@ def odd_term(A, Z):
 
 
 @nb.njit(fastmath=True, nogil=True)
-def LSD_def(A, Z, B_coul, B_surf, B_curv):
+def ΔLSD_def(A, Z, ΔB):
     A13 = A ** (1/3)
     N = A - Z
     I = (N - Z) / A
+    z_terms = 0.70978 / A13 * ΔB[0] * Z ** 2
+    curv_terms = (16.9707 * (1 - 2.2938 * I ** 2) * A13 * ΔB[1]
+                  + 3.8602 * (1 + 2.3764 * I ** 2) * ΔB[2]) * A13
+    return z_terms + curv_terms
+
+
+@nb.njit(fastmath=True, nogil=True)
+def LSD_def(A, Z, B_coul, B_surf, B_curv):
+    A13 = A ** (1 / 3)
+    N = A - Z
+    I = (N - Z) / A
+    I2 = I ** 2
     z_terms = (0.70978 / A13 * B_coul - 1.433e-5 * Z ** (0.39)
                - .9181 / A) * Z ** 2
-    curv_terms = (16.9707 * (1 - 2.2938 * I ** 2) * A13 ** 2 * B_surf
-                  + 3.8602 * (1 + 2.3764 * I ** 2) * A13 * B_curv
-                  - 15.492 * (1 - 1.8601 * I ** 2) * A)
+    curv_terms = 16.9707 * (1 - 2.2938 * I2) * A13 ** 2 * B_surf\
+                  + 3.8602 * (1 + 2.3764 * I2) * A13 * B_curv\
+                  - 15.492 * (1 - 1.8601 * I2) * A
     return Z * ΔM_p + N * ΔM_n + z_terms + curv_terms\
             - 10 * exp(- 4.2 * abs(I)) + odd_term(A, Z)
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def m_ex_np_ver(A, Z, np_m_data):
     """
         Searching mass excess from AME data table in case of absense
@@ -125,14 +161,14 @@ def m_ex_np_ver(A, Z, np_m_data):
     return search[0, -1]
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def lvl_dens_param(A, Z):
     I2 = (1 - 2 * Z / A) ** 2
     return .0126 * (1 - 6.275 * I2) * A + .3804 * (1 - 1.101 * I2) * A**(2 / 3)\
             + 1.4e-4 * Z**2 / A**(1 / 3)
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def density_deformed(A, Z, B_c, B_s, B_cur):
     """Defines density energy function from Nerlo-Pomorska paper"""
     return .092 * A + .036 * A**(2 / 3) * B_s + .275 * A**(1 / 3) * B_cur\
@@ -187,7 +223,7 @@ def mass_excess(A, Z, data):
     return data[search].iat[0, 3]
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def fast_neck_finder(ρ_2, a, z, z_s, z_0):
     dρ2dz = aux.dρ2_jit(a, z, z_s, z_0, 1)
     dz = 4 * (z[1] - z[0])
@@ -202,13 +238,10 @@ def fast_neck_finder(ρ_2, a, z, z_s, z_0):
     return extr_list[0], sqrt(ρ_2[extr_list[0]])
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True, nogil=True, parallel=True)
 def Wskpf_em_α_noZ(q, A, Z, E):
-
     N = 500
-    
     R0 = 1.2 * A ** (1 / 3)
-
     a = aux.q_to_a(q)
     z_s, c = aux.c_z(a)
 
@@ -216,30 +249,25 @@ def Wskpf_em_α_noZ(q, A, Z, E):
     z_full, ρ2_full = aux.ρ2_jit(a, z_full, z_s, c, True)
 
     z_nck_ind, _ = fast_neck_finder(ρ2_full, a, z_full, z_s, c)
-
     z_ar = (z_full, z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
     ρ_ar = (ρ2_full, ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
-
     α2 = np.zeros(3)
     z_c_ar = np.zeros(3)
 
     for i in range(3):
-        z, ρ_2 = z_ar[i], ρ_ar[i]
+        z, ρ_2 = z_ar[i].copy(), ρ_ar[i].copy()
         ρ = np.sqrt(ρ_2)
         z_c = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
         z_c_ar[i] = z_c
         dif_z = z - z_c
         R = np.sqrt(ρ ** 2 + dif_z ** 2)
-
         vol = .75 * aux.Sdx(ρ_2, z)
         R_0_f = vol ** (1 / 3)
-
-        integrand = (R/R_0_f - 1) ** 2 * (ρ_2 - dif_z * aux.dρ2_jit(a, z, z_s,
-                                                                    c, 1)
+        integrand = (R/R_0_f - 1) ** 2 * (ρ_2 - dif_z * aux.dρ2_jit(a, z,
+                                                                    z_s, c, 1)
                                           ) / R ** 3
-
         α2[i] = 2 * pi * aux.Sdx(integrand, z)
-      
+
     vrat = np.array([1 - vol, vol])
     α2 /= R0
 
@@ -257,7 +285,6 @@ def Wskpf_em_α_noZ(q, A, Z, E):
     A_f = np.round(vrat[0] * A); A_f = np.array([A_f, A - A_f], dtype='i4')
     Z_f = np.round(vrat[0] * Z); Z_f = np.array((Z_f, Z - Z_f), dtype='i4')
    
-
     E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
     E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
 
@@ -270,7 +297,7 @@ def Wskpf_em_α_noZ(q, A, Z, E):
     E_st = [List.empty_list(float64), List.empty_list(float64)]
     e_n = [List.empty_list(float64), List.empty_list(float64)]
 
-    for i in range(2):
+    for i in nb.prange(2):
         ΔB = cf[:, i] - np.ones(3)
         ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
         E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
@@ -330,24 +357,12 @@ def neck_break_energy(A_ar, Z_ar, B_surf_ar):
 
 
 @nb.njit(fastmath=True, nogil=True)
-def ΔLSD_def(A, Z, ΔB):
-    A13 = A ** (1/3)
-    N = A - Z
-    I = (N - Z) / A
-    z_terms = 0.70978 / A13 * ΔB[0] * Z ** 2
-    curv_terms = (16.9707 * (1 - 2.2938 * I ** 2) * A13 * ΔB[1]
-                  + 3.8602 * (1 + 2.3764 * I ** 2) * ΔB[2]) * A13
-    return z_terms + curv_terms
-
-
-@nb.njit(fastmath=True, nogil=True)
 def ΔE_def(A, Z, B_coul, B_surf, B_curv, m_data):
     return LSD_def(A, Z, B_coul, B_surf, B_curv) - m_ex_np_ver(A, Z, m_data)
 
 
-
 @nb.njit(fastmath=True, nogil=True)
-def Wskpf_em_α_Z_eq(q, A, Z, T):
+def Wskpf_em_α_Z_eq(q, A, Z, E):
 
     N = 500
     
@@ -473,6 +488,284 @@ def Wskpf_em_α_Z_eq(q, A, Z, T):
     return LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0],\
            RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1],\
            CN_b_cf, α2
+
+
+
+@nb.njit(fastmath=True, nogil=True)
+def Wskpf_em_tot(q, A, Z, T):
+
+    N = 500
+    R0 = 1
+    a = aux.q_to_a(q)
+    z_s, c = aux.c_z(a)
+
+    z_full = np.linspace(z_s - c, z_s + c, 2 * N)
+    z_full, ρ2_full = aux.ρ2_jit(a, z_full, z_s, c, True)
+
+    z_nck_ind, _ = fast_neck_finder(ρ2_full, a, z_full, z_s, c)
+
+    z_ar = (z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
+    ρ2_ar = (ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
+
+    v_r = np.zeros(2)
+    z_c = np.zeros(2)
+
+    for i, ρ_2, z in zip(range(2), ρ2_ar, z_ar):
+        v_r[i] = .75 * aux.Sdx(ρ_2, z)
+        # if v_r[i] > 1 or v_r[i] <= 0:
+        #     return debugger_out_dat(out, np.array([v_r[i], 1 - v_r[i]]), 
+        #                             A, Z, T, np.ones((3, 2)))
+        z_c[i] = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
+    r12 = z_c[1] - z_c[0]
+
+    if abs(v_r.sum() - 1) > .1 / N:
+        R0 = v_r.sum() ** (-1 / 3)
+        v_r /= v_r.sum()
+        z_ar = [el * R0 for el in z_ar]
+
+    R12 = R0 * r12 * A ** (1/3)
+
+    R_sph_f = [R0 * el ** (1 / 3) for el in v_r]
+
+    a_l_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[0], 'left', False)
+    a_r_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[1], 'right', False)
+    q_l_new, q_r_new = aux.a_to_q(a_l_new), aux.a_to_q(a_r_new)
+
+    bc1, bs1, bk1 = aux.fcs_short(q_l_new)
+    bc2, bs2, bk2 = aux.fcs_short(q_r_new)
+    bc, bs, bk = aux.fcs_short(q)
+
+    # bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2 = aux.surface_coefficients(q)  
+
+    cf = np.array([[bc1, bc2],
+                   [bs1, bs2],
+                   [bk1, bk2]]).T
+
+    CN_b_cf = np.array((bc, bs, bk))
+    LF_b_cf = cf[0].copy()
+    RF_b_cf = cf[1].copy()
+
+    A_f = np.round(v_r[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_h = max(A_f)
+
+    hi = np.where(A_f == A_h)[0][0]
+    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
+
+    bch, bsh, bkh = cf[hi].copy()
+    bcl, bsl, bkl = cf[li].copy()
+
+    Z_f = int(v_r[hi] * Z)
+
+    l = 5
+    Z_range = np.arange(Z_f - l, Z_f + l, dtype=int64)
+
+    E_diff = np.array([LSD_def(A_f[hi], z_f, bch, bsh, bkh)
+                       + LSD_def(A_f[li], Z - z_f, bcl, bsl, bkl)
+                       + 1.44 * z_f * (Z - z_f) / R12
+                       - LSD_def(A, Z, bc, bs, bk) for z_f in Z_range])
+
+    min_E_diff = min(E_diff)
+        
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
+       
+    int_Z_distr = Z_distr.cumsum()
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
+
+    Z_f = int(Z_range[int_Z_distr > rdnum][0])
+
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
+    Z_f = Z_new.copy()
+           
+    E = T ** 2 * density_deformed(A, Z, bc, bs, bk)
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
+
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+       
+    LF_Z, RF_Z = Z_f.copy()
+    LF_A_prime, RF_A_prime = A_f.copy()
+
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
+
+    for i in range(2):
+        ΔB = cf[i] - np.ones(3)
+        ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
+            ϵ_n = np.linspace(0, ϵ_n_max, N)
+            dϵ = ϵ_n[1]
+            ϵ_n[1:] -= dϵ / 2
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
+            f *= coef
+            g = f.cumsum()
+            grn = random.uniform(0, 1) * g[-1]
+            if grn < g[1]:
+                ϵ_neut = grn / g[0] * dϵ
+            else:
+                j = 2
+                while g[j] < grn and j < N - 1:
+                    j += 1
+                ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+
+    return LF_Z, LF_A_prime, A_f[0], LF_b_cf, E_st[0], e_n[0],\
+           RF_Z, RF_A_prime, A_f[1], RF_b_cf, E_st[1], e_n[1],\
+           CN_b_cf, E, 1.44 * Z_f[0] * Z_f[1] / R12
+
+
+
+@nb.njit(fastmath=True, nogil=True, parallel=True)
+def Wskpf_em_tot_gh3d(q, A, Z, T, qlim, dq, N_q, Bc, Bs, Bk):
+
+    N = 500
+    R0 = 1
+    a = aux.q_to_a(q)
+    z_s, c = aux.c_z(a)
+
+    z_full = np.linspace(z_s - c, z_s + c, 2 * N)
+    z_full, ρ2_full = aux.ρ2_jit(a, z_full, z_s, c, True)
+
+    z_nck_ind, _ = fast_neck_finder(ρ2_full, a, z_full, z_s, c)
+
+    z_ar = (z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
+    ρ2_ar = (ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
+
+    v_r = np.zeros(2)
+    z_c = np.zeros(2)
+
+    for i, ρ_2, z in zip(range(2), ρ2_ar, z_ar):
+        v_r[i] = .75 * aux.Sdx(ρ_2, z)
+        # if v_r[i] > 1 or v_r[i] <= 0:
+        #     return debugger_out_dat(out, np.array([v_r[i], 1 - v_r[i]]), 
+        #                             A, Z, T, np.ones((3, 2)))
+        z_c[i] = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
+    r12 = z_c[1] - z_c[0]
+
+    if abs(v_r.sum() - 1) > .1 / N:
+        R0 = v_r.sum() ** (-1 / 3)
+        v_r /= v_r.sum()
+        z_ar = [el * R0 for el in z_ar]
+
+    R12 = R0 * r12 * A ** (1/3)
+
+    R_sph_f = [R0 * el ** (1 / 3) for el in v_r]
+
+    a_l_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[0], 'left', False)
+    a_r_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[1], 'right', False)
+    q_l_new, q_r_new = aux.a_to_q(a_l_new), aux.a_to_q(a_r_new)
+    
+    qs = np.zeros((len(q), 3))
+    qs[0] = q.copy()
+    qs[1] = q_l_new.copy()
+    qs[2] = q_r_new.copy()
+      
+    cfs = np.zeros((3, 3))
+    for i, el1 in enumerate(qs):
+        for j, el2 in enumerate((Bc, Bs, Bk)):
+            cfs[i, j] = gh3d(el1, qlim, dq, N_q, el2)
+
+    bc, bs, bk = cfs[0].copy()
+    bs1, bk1, bc1 = cfs[1].copy()
+    bs2, bk2, bc2 = cfs[2].copy()
+
+    A_f = np.round(v_r[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_h = max(A_f)
+
+    hi = np.where(A_f == A_h)[0][0]
+    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
+
+    bch, bsh, bkh = cfs[hi+1].copy()
+    bcl, bsl, bkl = cfs[li+1].copy()
+
+    Z_f = int(v_r[hi] * Z)
+
+    l = 5
+    Z_range = np.arange(Z_f - l, Z_f + l, dtype=int64)
+
+    E_diff = np.array([LSD_def(A_f[hi], z_f, bch, bsh, bkh)
+                       + LSD_def(A_f[li], Z - z_f, bcl, bsl, bkl)
+                       + 1.44 * z_f * (Z - z_f) / R12
+                       - LSD_def(A, Z, bc, bs, bk) for z_f in Z_range])
+
+    min_E_diff = min(E_diff)
+        
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
+       
+    int_Z_distr = Z_distr.cumsum()
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
+
+    Z_f = int(Z_range[int_Z_distr > rdnum][0])
+
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
+    Z_f = Z_new.copy()
+        
+    E = T ** 2 * density_deformed(A, Z, bc, bs, bk)
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
+
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+       
+    LF_Z, RF_Z = Z_f.copy()
+    LF_A_prime, RF_A_prime = A_f.copy()
+
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
+
+    for i in nb.prange(2):
+        ΔB = cfs[i+1] - np.ones(3)
+        ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
+            ϵ_n = np.linspace(0, ϵ_n_max, N)
+            dϵ = ϵ_n[1]
+            ϵ_n[1:] -= dϵ / 2
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
+            f *= coef
+            g = f.cumsum()
+            grn = random.uniform(0, 1) * g[-1]
+            if grn < g[1]:
+                ϵ_neut = grn / g[0] * dϵ
+            else:
+                j = 2
+                while g[j] < grn and j < N - 1:
+                    j += 1
+                ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+
+    return LF_Z, LF_A_prime, A_f[0], cfs[1], E_st[0], e_n[0],\
+           RF_Z, RF_A_prime, A_f[1], cfs[2], E_st[1], e_n[1],\
+           cfs[0], E, 1.44 * Z_f[0] * Z_f[1] / R12
 
 
 
@@ -688,84 +981,68 @@ def Wskpf_em_α(q, A, Z, T, qlim, dq, N_q, R12, α2, vol):
     return out
 
 
-def Wskpf_em_def(q, A, Z, T, qlim, dq, N_q, R12, vol):
+@nb.njit(fastmath=True, nogil=True, parallel=True)
+def emission_FF(A, Z, Al, Zl, T, Bcfs):
+    N = 300
+    bc, bs, bk = Bcfs[1:4]
+    cfs = Bcfs[4:].reshape((2, 3))
+    bcL, bsL, bkL = cfs[0]
+    bcR, bsR, bkR = cfs[1]
+    R12 = Bcfs[0] * A ** (1/3)
+    
+    A_f = np.array([Al, A - Al], dtype=int64)
+    Z_f = np.array([Zl, Z - Zl], dtype=int64)
+    
+    hi = A_f[0] < A_f[1]
+    hi, li = int(hi), int(~hi)
+    Zh = Z_f[hi]
+    l = 5
+    Z_range = np.arange(Zh - l, Zh + l, dtype=int64)
+    bch, bsh, bkh = cfs[hi]
+    bcl, bsl, bkl = cfs[li]
+    
+    E_diff = np.array([LSD_def(A_f[hi], z_f, bch, bsh, bkh)
+                       + LSD_def(A_f[li], Z - z_f, bcl, bsl, bkl)
+                       + 1.44 * z_f * (Z - z_f) / R12
+                       - LSD_def(A, Z, bc, bs, bk) for z_f in Z_range])
 
-    N = 1000
-
-    out = [{'Z': '', 'A_prime': '', 'A_rest': '', 'B_cf': '', 'E*': [],
-            'e_n':[]} for i in range(2)] + [[],]
-
-    bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2 = aux.surface_coefficients(q)
-    out[0]['B_cf'] = bc1, bs1, bk1
-    out[1]['B_cf'] = bc2, bs2, bk2
-    out[2] = bc, bs, bk
-
-    cf = np.array([[bc1, bc2], [bs1, bs2], [bk1, bk2]])
-
-    E_star = density(A, Z, *out[2]) * T ** 2
-
-    R_12 = 1.2 * A ** (1 / 3) * gh_ap3d(q, qlim, dq, N_q, R12)
-    vrat = np.array([gh_ap3d(q, qlim, dq, N_q, el) for el in vol])
-    A_f = round(vrat[0] * A); A_f = np.array((A_f, A - A_f), dtype=int)
-    # Z_f = round(vrat[0] * Z); Z_f = np.array((Z_f, Z - Z_f), dtype=int)
-
-    A_h = max(A_f)
-    hi = np.where(A_f == A_h)[0][0]
-    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
-    Z_f = int(vrat[hi] * Z)
-
-    lim = 4
-    Z_range = np.arange(Z_f - lim, Z_f + lim)
-
-    cf_h = tuple(cf[:, hi])
-    cf_l = tuple(cf[:, li])
-
-    E_diff = np.array([LSD_def(A_f[hi], z_f, *cf_h)
-                        + LSD_def(A_f[li], Z - z_f, *cf_l)
-                        + 1.44 * z_f * (Z - z_f) / R_12 for z_f in Z_range]
-                      )
-    E_diff -= LSD_def(A, Z, *out[2])
-
-    min_E_diff = min(E_diff)                            
-
-    E_Wig = 5
-
+    min_E_diff = min(E_diff)
     Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
     int_Z_distr = Z_distr.cumsum()
-    rdnum = random.uniform(0, 1) * int_Z_distr[-1]
-
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
     Z_f = int(Z_range[int_Z_distr > rdnum][0])
-
-    Z_new = np.zeros(2, dtype=int)
-    Z_new[hi], Z_new[li] = Z_f, Z - Z_f
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
     Z_f = Z_new.copy()
 
-    for i in range(2):
-        ΔE_def = LSD_def(A_f[i], Z_f[i], *(cf[:, i] - np.ones(3)))
-        # mass_ex = m_ex(A_f[i], Z_f[i], mass_data)
-        mass_ex = m_ex_np_ver(A_f[i], Z_f[i], mass_data_np) -\
-            m_ex_np_ver(A_f[i] - 1, Z_f[i], mass_data_np)
-        out[i]['E*'].append(ΔE_def + mass_ex + vrat[i] * E_star)
+    E = T ** 2 * density_deformed(A, Z, bc, bs, bk)
 
-    out[0]['Z'], out[1]['Z'] = Z_f.copy()
-    out[0]['A_prime'], out[1]['A_rest'] = A_f.copy()
-    out[0]['A_rest'], out[1]['A_prime'] = A_f.copy()
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bcR, bsR, bkR)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bcL, bsL, bkL)
+   
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+  
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
 
-    for i in range(2):
-        while out[i]['E*'][-1] > ΔM_n:
-            out[i]['E*'].append(out[i]['E*'][-1] - ΔM_n)
-            ϵ_n_max = out[i]['E*'][-1]
+    for i in nb.prange(2):
+        bc, bs, bk = cfs[i]
+        ΔE_def = LSD_def(A_f[i], Z_f[i], bc, bs, bk) - LSD(A_f[i], Z_f[i])
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
             ϵ_n = np.linspace(0, ϵ_n_max, N)
             dϵ = ϵ_n[1]
             ϵ_n[1:] -= dϵ / 2
-            coef = dϵ * fact / den_level(out[i]['E*'][-1], out[i]['A_rest'],
-                                         out[i]['Z'])
-
-            out[i]['A_rest'] -= 1
-            A13 = out[i]['A_rest'] ** (1 / 3)
-            f = σ_inv_e(ϵ_n[1:], A13) * den_level(ϵ_n_max - ϵ_n[1:],
-                                                  out[i]['A_rest'],
-                                                  out[i]['Z'])
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+       
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
             f *= coef
             g = f.cumsum()
             grn = random.uniform(0, 1) * g[-1]
@@ -776,15 +1053,258 @@ def Wskpf_em_def(q, A, Z, T, qlim, dq, N_q, R12, vol):
                 while g[j] < grn and j < N - 1:
                     j += 1
                 ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
-            out[i]['e_n'].append(ϵ_neut)
-            mass_ex = m_ex_np_ver(out[i]['A_rest'], out[i]['Z'], mass_data_np)\
-                - m_ex_np_ver(out[i]['A_rest'] - 1, out[i]['Z'], mass_data_np)
-            out[i]['E*'][-1] += mass_ex - out[i]['e_n'][-1]
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+    
+    return A_f, Z_f, E, E_st, e_n
 
-    # import seaborn as sns
-    # sns.histplot(g/g[-1], binwidth=.05, stat='probability')
 
-    return out
+@nb.njit(fastmath=True, nogil=True, parallel=True)
+def emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q, Bc, Bs, Bk):
+
+    N = 500
+    R0 = 1
+    a = aux.q_to_a(q)
+    z_s, c = aux.c_z(a)
+
+    z_full = np.linspace(z_s - c, z_s + c, 2 * N)
+    z_full, ρ2_full = aux.ρ2_jit(a, z_full, z_s, c, True)
+
+    z_nck_ind, _ = fast_neck_finder(ρ2_full, a, z_full, z_s, c)
+
+    z_ar = (z_full[:z_nck_ind+1], z_full[z_nck_ind+1:])
+    ρ2_ar = (ρ2_full[:z_nck_ind+1], ρ2_full[z_nck_ind+1:])
+
+    v_r = np.zeros(2)
+    z_c = np.zeros(2)
+
+    for i, ρ_2, z in zip(range(2), ρ2_ar, z_ar):
+        v_r[i] = .75 * aux.Sdx(ρ_2, z)
+        z_c[i] = aux.Sdx(ρ_2 * z, z) / aux.Sdx(ρ_2, z)
+    r12 = z_c[1] - z_c[0]
+
+    if abs(v_r.sum() - 1) > .1 / N:
+        R0 = v_r.sum() ** (-1 / 3)
+        v_r /= v_r.sum()
+        z_ar = [el * R0 for el in z_ar]
+
+    R12 = R0 * r12 * A ** (1/3)
+
+    R_sph_f = [R0 * el ** (1 / 3) for el in v_r]
+
+    a_l_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[0], 'left', False)
+    a_r_new = aux.a_trfrm(ρ2_full, z_full, z_nck_ind,
+                            R_sph_f[1], 'right', False)
+    q_l_new, q_r_new = aux.a_to_q(a_l_new), aux.a_to_q(a_r_new)
+    
+    qs = np.zeros((len(q), 3))
+    qs[0] = q.copy()
+    qs[1] = q_l_new.copy()
+    qs[2] = q_r_new.copy()
+      
+    cfs = np.zeros((3, 3))
+    for i, el1 in enumerate(qs):
+        for j, el2 in enumerate((Bc, Bs, Bk)):
+            cfs[i, j] = gh3d(el1, qlim, dq, N_q, el2)
+
+    bc, bs, bk = cfs[0].copy()
+    bs1, bk1, bc1 = cfs[1].copy()
+    bs2, bk2, bc2 = cfs[2].copy()
+
+    A_f = np.round(v_r[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_h = max(A_f)
+
+    hi = np.where(A_f == A_h)[0][0]
+    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
+
+    bch, bsh, bkh = cfs[hi+1].copy()
+    bcl, bsl, bkl = cfs[li+1].copy()
+
+    Z_f = int(v_r[hi] * Z)
+
+    l = 5
+    Z_range = np.arange(Z_f - l, Z_f + l, dtype=int64)
+
+    E_diff = np.array([LSD_def(A_f[hi], z_f, bch, bsh, bkh)
+                       + LSD_def(A_f[li], Z - z_f, bcl, bsl, bkl)
+                       + 1.44 * z_f * (Z - z_f) / R12
+                       - LSD_def(A, Z, bc, bs, bk) for z_f in Z_range])
+
+    min_E_diff = min(E_diff)
+        
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
+       
+    int_Z_distr = Z_distr.cumsum()
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
+
+    Z_f = int(Z_range[int_Z_distr > rdnum][0])
+
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
+    Z_f = Z_new.copy()
+        
+    E = T ** 2 * density_deformed(A, Z, bc, bs, bk)
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
+
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+       
+    LF_Z, RF_Z = Z_f.copy()
+    LF_A_prime, RF_A_prime = A_f.copy()
+
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
+
+    for i in nb.prange(2):
+        ΔB = cfs[i+1] - np.ones(3)
+        ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
+            ϵ_n = np.linspace(0, ϵ_n_max, N)
+            dϵ = ϵ_n[1]
+            ϵ_n[1:] -= dϵ / 2
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
+            f *= coef
+            g = f.cumsum()
+            grn = random.uniform(0, 1) * g[-1]
+            if grn < g[1]:
+                ϵ_neut = grn / g[0] * dϵ
+            else:
+                j = 2
+                while g[j] < grn and j < N - 1:
+                    j += 1
+                ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+
+    return A_f, Z_f, E, E_st, e_n
+
+
+def emFF_decoder(em_data):
+    if len(em_data[0]) == 2:
+        em_data = [em_data,]
+    A_f_list = []
+    Z_f_list = []
+    E_star_list = []
+    E_star_f_list = []
+    e_n_lists = []
+    for el in em_data:
+        A_f_list.append(el[0])
+        Z_f_list.append(el[1])
+        E_star_list.append(el[2])
+        E_star_f_list.append([[L for L in el[3][0]],
+                              [R for R in el[3][1]]])
+        e_n_lists.append([[L for L in el[4][0]],
+                          [R for R in el[4][1]]])
+    return np.array(A_f_list), np.array(Z_f_list), np.array(E_star_list),\
+        E_star_f_list, e_n_lists
+
+
+@nb.njit(fastmath=True, nogil=True)
+def Wskpf_em_def(Af, Zf, T, Bcfs, r12):
+
+    N = 1000
+
+    bf, bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2 = Bcfs
+    R12 = r12 * A ** (1/3)
+    v_r = np.array(bf, 1 - bf)
+    cf = np.array([[bc1, bs1, bk1],
+                   [bc2, bs2, bk2]])
+      
+    A_f = np.round(v_r[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_h = max(A_f)
+       
+    hi = np.where(A_f == A_h)[0][0]
+    li = np.array((0, 1))[np.array((0, 1)) != hi][0]
+   
+    bch, bsh, bkh = cf[hi+1].copy()
+    bcl, bsl, bkl = cf[li+1].copy()
+   
+    Z_f = int(v_r[hi] * Z)
+   
+    l = 5
+    Z_range = np.arange(Z_f - l, Z_f + l, dtype=int64)
+   
+    E_diff = np.array([LSD_def(A_f[hi], z_f, bch, bsh, bkh)
+                       + LSD_def(A_f[li], Z - z_f, bcl, bsl, bkl)
+                       + 1.44 * z_f * (Z - z_f) / R12
+                       - LSD_def(A, Z, bc, bs, bk) for z_f in Z_range])
+
+    min_E_diff = min(E_diff)
+
+    Z_distr = np.exp(-((E_diff - min_E_diff) / E_Wig) ** 2)
+       
+    int_Z_distr = Z_distr.cumsum()
+    int_Z_distr /= int_Z_distr[-1]
+    rdnum = random.uniform(0, 1)
+       
+    Z_f = int(Z_range[int_Z_distr > rdnum][0])
+       
+    Z_new = np.zeros(2, dtype=int64)
+    Z_new[hi] = Z_f; Z_new[li] = Z - Z_f
+    Z_f = Z_new.copy()
+        
+    E = T ** 2 * density_deformed(A, Z, bc, bs, bk)
+    E_star_ff = density_deformed(A_f[1], Z_f[1], bs2, bk2, bc2)
+    E_star_ff /= E_star_ff + density_deformed(A_f[0], Z_f[0], bs1, bk1, bc1)
+       
+    E_star_ff = np.array([1 - E_star_ff, E_star_ff])
+    E_star_ff *= E
+       
+    LF_Z, RF_Z = Z_f.copy()
+    LF_A_prime, RF_A_prime = A_f.copy()
+       
+    E_st = [List.empty_list(float64), List.empty_list(float64)]
+    e_n = [List.empty_list(float64), List.empty_list(float64)]
+       
+    for i in range(2):
+        ΔB = cfs[i+1] - np.ones(3)
+        ΔE_def = ΔLSD_def(A_f[i], Z_f[i], ΔB)
+        E_st_F = List([ΔE_def + m_exc_n(A_f[i], Z_f[i], mass_data_np)
+                        + E_star_ff[i]])
+        while E_st_F[-1] > ΔM_n:
+            ϵ_n_max = E_st_F[-1] - ΔM_n
+            ϵ_n = np.linspace(0, ϵ_n_max, N)
+            dϵ = ϵ_n[1]
+            ϵ_n[1:] -= dϵ / 2
+            coef = dϵ * fact / den_lvl_float(E_st_F[-1], A_f[i], Z_f[i])
+       
+            A_f[i] -= 1
+            A13 = A_f[i] ** (1 / 3)
+            f = σ_inv_e(ϵ_n[1:], A13) * den_lvl_arr(ϵ_n_max - ϵ_n[1:],
+                                                    A_f[i], Z_f[i])
+            f *= coef
+            g = f.cumsum()
+            grn = random.uniform(0, 1) * g[-1]
+            if grn < g[1]:
+                ϵ_neut = grn / g[0] * dϵ
+            else:
+                j = 2
+                while g[j] < grn and j < N - 1:
+                    j += 1
+                ϵ_neut = ϵ_n[j] - dϵ * (g[j] - grn) / (g[j] - g[j-1])
+            e_n[i].append(ϵ_neut)
+            mass_ex = m_exc_n(A_f[i], Z_f[i], mass_data_np)
+            E_st_F.append(ϵ_n_max - ϵ_neut + mass_ex)
+        E_st[i] = E_st_F.copy()
+    
+    return LF_Z, LF_A_prime, A_f[0], E_st[0], e_n[0],\
+           RF_Z, RF_A_prime, A_f[1], E_st[1], e_n[1],\
+           E, 1.44 * Z_f[0] * Z_f[1] / R12
 
 
 def debugger_out_dat(out_lib, vrat, A, Z, T, cf):
@@ -1022,15 +1542,12 @@ def Wskpf_em_def_new(q, A, Z, T):
     return out
 
 
-
-
-
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def m_exc_n(A, Z, ms_data):
     return m_ex_np_ver(A, Z, ms_data) - m_ex_np_ver(A - 1, Z, ms_data)
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def m_exc_v(A, Z, ms_data, v):
     if v in ['p', 'H', 'proton']:
         A_d = A - 1
@@ -1127,13 +1644,6 @@ def neck_finder2(ρ_2, z):
 
 ###############################################################################
 
-m_unit = 939.5656
-h_bar_c = 197.327
-sqrt_pi = 1.7724538509055159
-pi2 = 9.869604401089358
-
-fact = 2 * m_unit / (pi2 * h_bar_c ** 2)
-
 mass_data = pd.read_fwf('mass 16.txt')[['A', 'Z', 'N', 'M_EXS']]
 for i, el in enumerate(mass_data.loc[:, 'M_EXS']):
     if '#' in el:
@@ -1144,8 +1654,7 @@ mass_data_np = mass_data.to_numpy()
 ΔM_p = mass_excess(1, 1, mass_data)
 ΔM_α = mass_excess(4, 2, mass_data)
 
-out_dict = {'Z': '', 'A_prime': '', 'A_rest': '', 'B_cf': '',
-            'E*': '', 'e_n': ''}
+ΔM_n_γ = ΔM_n + E_γ_thres
 
 # colspecs = [(0, 3), (4, 7), (18, 30)]
 # data_nubase = pd.read_fwf('nubase_mas20.txt', colspecs=colspecs,
@@ -1154,13 +1663,7 @@ out_dict = {'Z': '', 'A_prime': '', 'A_rest': '', 'B_cf': '',
 # data_nubase['M_EXS'] = data_nubase['M_EXS'].str.replace('#','').astype(np.float32) / 1e3
 # mass_data_NUB_np = data_nubase.to_numpy()
 
-n_emission = 6
 
-E_Wig = 5
-
-E_0 = 1
-E_γ_thres = 5
-ΔM_n_γ = ΔM_n + E_γ_thres
 
 if __name__ == "__main__":
     sys.exit()

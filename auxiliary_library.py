@@ -9,6 +9,8 @@ from math import pi, sqrt, copysign, sin, cos
 
 import numpy as np
 import numba as nb
+import threading
+
 
 ###############################################################################
 ############################# CONSTANTS VALUES ################################
@@ -84,17 +86,17 @@ def gauleg(n):
 
 ###############################################################################
 
-ng1 = 48
-ng2 = 16
-ng3 = 32
+ng1 = 64
+ng3 = 48
+ng2 = int(ng3 // 4)
 
 xg1, wg1 = gauleg(ng1)
 xg2, wg2 = gauleg(ng2)
 xg3, wg3 = gauleg(ng3)
 
-Δφ = np.zeros((ng2, ng3))
 φ1 = .25 * pi * (xg2 + 1)
 φ2 = pi * (xg3 + 1)
+Δφ = np.zeros((ng2, ng3))
 for i, j in np.ndindex(Δφ.shape):
     Δφ[i, j] = φ1[i] - φ2[j]
 
@@ -668,7 +670,7 @@ def fcs_pythonic(q):
     return bf, b_surf, b_curv, J_x, J_z, bq, b_coul, R12
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True, nogil=True, parallel=True)
 def fcs_short(q):
     """
     Calculates:
@@ -946,7 +948,7 @@ def surface_coefficients(q):
                          corresponding spherical nucleus.
     """
 
-    N = 1000
+    N = 500
 
 #  Recall that in the whole program r0 = 1.0
     r0 = 1
@@ -957,8 +959,7 @@ def surface_coefficients(q):
 
     z, ρ_2 = ρ2_jit(a, z, z_sh, z_0, True)
 
-    bw, bf, R12, vol, rn, z_nck, _, z_0, z_sh = bcong_Dobr(z, ρ_2, a,
-                                                           z_sh, z_0)
+    bw, bf, R12, vol, rn, z_nck, _, z_0, z_sh = bcong_Dobr(z, ρ_2, a, z_sh, z_0)
     
     if (vol - 1) > 1e-5:
         z = np.linspace(z_sh - z_0, z_0 + z_sh, N)
@@ -1122,6 +1123,146 @@ def surface_coefficients(q):
     bk2 = .125 * lim2 * (1 - bf)**(-1 / 3) * cur2
 
     return bc, bs, bk, bc1, bs1, bk1, bc2, bs2, bk2
+
+
+@nb.njit(fastmath=True, nogil=True, parallel=True)
+def q_to_nucl_param(q):
+    """
+    Calculates:
+        bs, bk, bc, bw   LD shape functions corresponding respectively to 
+                         surface, curvature, Coulomb and congruence energy;
+        bf,r12           mass ratio of nascent fission fragments and their
+                         center-of-mass distance (see bcong);
+        bx,bz            inverse moments of inertia relative to a sphere
+                         j_0/j_x, j_0/j_z;
+        bq               quadrupole moment in units of e*Z*R_0**2;
+        vol              volume of the part with rho^2>0, fission occurs
+                         when vol>1;
+        rn               neck radius in units of the radius R_0 of the
+                         corresponding spherical nucleus.
+    """
+
+    N   = 500
+
+#  Recall that in the whole program r0 = 1.0
+    r0  = 1
+    a   = q_to_a(q)
+    z_sh, z0 = c_z(a)
+    z   = np.linspace(z_sh - z0, z0 + z_sh, N)
+
+    z, ρ_2 = ρ2_jit(a, z, z_sh, z0, True)
+
+    bw, bf, r12, vol, rn, z_nck, z_nck_ind, z0, z_sh = bcong_Dobr(z, ρ_2, a,
+                                                                  z_sh, z0)
+
+    if (vol - 1) > 1e-5:
+        z = np.linspace(z_sh - z0, z0 + z_sh, N)
+        z, ρ_2 = ρ2_jit(a, z, z_sh, z0, True)
+
+    r_0   = [r0,   bf ** (1 / 3),            (1 - bf) ** (1 / 3)]
+
+    a_L = a_trfrm(ρ_2, z, z_nck_ind, r_0[1], 'left', False)
+    a_R = a_trfrm(ρ_2, z, z_nck_ind, r_0[2], 'right', False)
+    z_sh_L, z0_L = np.array(c_z(a_L)) # * r_0[1]
+    z_sh_R, z0_R = np.array(c_z(a_R)) # * r_0[2]
+
+    a_i   = [a,    a_L,    a_R]
+    z_0   = [z0,   z0_L,   z0_R]
+    shift = [z_sh, z_sh_L, z_sh_R]
+
+#   Nonaxiallity parameter
+    η = a[0]
+
+#   Evaluation of some time consuming functions on the integration nodes
+#   phi1 varies from 0 to pi/2
+
+    # return a_to_q(a_L), a_to_q(a_R)
+
+    ag_1   = np.sqrt(g(φ1, η))
+    adg1   = 0.5 / ag_1 * dgdφ(φ1, η)
+    addg1  = 0.5 / ag_1 * (d2gdφ2(φ1, η) - 2 * adg1 ** 2)
+    ag_2   = np.sqrt(g(φ2, η))
+    adg2   = 0.5 / ag_2 * dgdφ(φ2, η)
+    g_args = ag_1, adg1, addg1, ag_2, adg2
+
+#   z varies from z_min to z_max
+
+    # return a_i, z_0, shift, r_0
+
+    cfs = np.empty((3, 3))
+    
+    for i in nb.prange(3):
+        z     = z_0[i] * xg1 + shift[i]
+#   rho2s and its first and second derivative with respect to z
+        ρ2s   = ρ2_jit(a_i[i], z, shift[i], z_0[i], False)[1]
+        ρs    = np.sqrt(np.maximum(1e-16 * np.ones_like(z), ρ2s))
+        dρ2s  = dρ2_jit(a_i[i], z, shift[i], z_0[i], 1)
+        dρs   = .5 / ρs * dρ2s
+        d2ρ2s = dρ2_jit(a_i[i], z, shift[i], z_0[i], 2)
+        d2ρs  = .5 / ρs * (d2ρ2s - 2 * dρs ** 2)
+
+#   Evaluation of the contributions determining the surface, curvature and
+#   Coulomb shape functions bs, bk, bc, quadrupole moment bq and (inverse)
+#   rotational moments of inertia bx, bz
+
+        cfs[i] = megaloop(z, r_0[i], z_0[i], ρs, dρs, d2ρs, *g_args)
+        
+    return np.concatenate((np.array([bf, r12]), cfs.flatten()))
+
+
+@nb.njit(fastmath=True)
+def megaloop(z, r0, z_0, rs, drs, ddrs, ag_1, adg1, addg1, ag_2, adg2):
+    sur = 0
+    cur = 0
+    cou = 0
+#   integration over z1
+    for z1, a1, rs1, drs1, ddrs1 in zip(z, wg1, rs, drs, ddrs):
+#   integration over phi1 from 0 to pi/2
+        for φ_1, a2, g1, dg1, ddg1, j in zip(φ1, wg2, ag_1, adg1, addg1,
+                                             range(ng2)):
+            r1 = rs1 * g1
+            r12 = r1 ** 2
+            dr1dz = drs1 * g1
+            dr1dp = rs1 * dg1
+            dr1dp2 = dr1dp ** 2
+
+            d2r1dz2 = ddrs1 * g1
+            d2r1dzdp = drs1 * dg1
+            d2r1dp2 = rs1 * ddg1
+            sur += a1 * a2 * sqrt(r12 + dr1dp2 + (r1 * dr1dz)**2)
+            cur += a1 * a2 * ((r1 - d2r1dp2) * r1 * dr1dz**2 + r12
+                              - r1 * d2r1dp2 + 2 * dr1dp2
+                              + 2 * dr1dz * dr1dp * r1 * d2r1dzdp
+                              - r1 ** 3 * d2r1dz2 -r1 * d2r1dz2 * dr1dp2
+                              ) / (r12 + dr1dp2 + (r1 * dr1dz)**2)
+#   integration over phi2 from 0 to 2pi
+            for φ_2, a3, g2, dg2, cph12, sph12 in zip(φ2, wg3, ag_2, adg2,
+                                                      cosΔφ[j], sinΔφ[j]):
+#   integration over z2
+                for z2, a4, rs2, drs2 in zip(z, wg1, rs, drs):
+                    Δz = z1 - z2
+                    r2 = rs2 * g2
+                    r22 = r2 ** 2
+                    r1r2 = r1 * r2 * cph12
+                    dr2dz = drs2 * g2
+                    dr2dp = rs2 * dg2
+                    denumenator = sqrt(r12 + r22 - 2 * r1r2 + Δz**2)
+                    numenator = (r1**2 - r1 * r2 * cph12 - r2 * sph12 * dr1dp 
+                                 - r1 * (z1 - z2) * dr1dz)\
+                        * (r22 - r1r2 + r1 * sph12 * dr2dp  + r2 * Δz * dr2dz)
+                    cou += a1 * a2 * a3 * a4 * numenator/ denumenator
+
+    # bc = 5 / (64 * r0 ** 5) * z_0 ** 2 * cou
+    # bs = .25 * z_0 / r0 ** 2 * sur
+    # bk = .125 * z_0 / r0 * cur
+
+    bs = 0.25 * z_0 * sur
+    bk = 0.125 * z_0 * cur
+    bc = 5 / 64 * z_0 ** 2 * cou
+
+
+    return bc, bs, bk
+
 
 if __name__ == "__main__":
     pass

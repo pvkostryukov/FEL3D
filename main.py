@@ -22,27 +22,28 @@ from math import sqrt, exp, tanh, isnan, erf
 from scipy import linalg as lalg
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from numba_progress import ProgressBar
 import pandas as pd
 import re
 
 import numba as nb
 import auxiliary_library as aux
+import emission_auxillary_lib as em 
+
 
 ###############################################################################
 ######################### DEFINING CONTANT VALUES #############################
 ###############################################################################
 
-rt2 = sqrt(2)
-nodes = 5
-h_nodes = nodes // 2
-γ = 1  # / 1.043218
+from constants import dim, nodes, h_nodes, γ, E_0, extensions
 
-E_0 = 1.5
+rt2 = sqrt(2)
+
 T_const = 1.5
 a_t = .3
 
-extensions = [['.1sh', '.1exsh', '.1', '.1ex', '.1el', '.1exl'], 
-              ['.dat03', '.dat0329', '.dat', '.she', '.dat29', '.she29']]
+# extensions = [['.1sh', '.1exsh', '.1', '.1ex', '.1el', '.1exl'], 
+#               ['.dat03', '.dat0329', '.dat', '.she', '.dat29', '.she29']]
 user_path = os.getcwd()
 OS = platform.system()
 
@@ -147,7 +148,7 @@ def fourier_file_data(data_file: str):
     for i, el in enumerate(data[::3]):
         dat_line = np.array(list(map(float, el.split())))
         ind = tuple(np.round((dat_line[which_q] - qlim[0]) / dq).astype(int))
-        bs[ind], bk[ind], bc[ind] = dat_line[6:9]
+        bs[ind], bc[ind], bk[ind] = dat_line[6:9]
         bf[ind], r12[ind], bx[ind] = dat_line[10:13]
         vol[ind], c[ind], rn[ind] = dat_line[15:]
         dat_line = np.array(list(map(float, data[3 * i + 1].split()[:-1])))
@@ -308,7 +309,7 @@ def round_njt(x, decimals):
     return np.round_(x, decimals, out)
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def gh_ap3d(q, qlim, dq, N_q, matrix):
     """Calculate derivative by G-H method on 3d mesh"""
     crd = (q - qlim[0]) / dq
@@ -319,9 +320,7 @@ def gh_ap3d(q, qlim, dq, N_q, matrix):
             u2 = (γ * (crd[i] - (crd_int[i] + j - h_nodes))) ** 2
             f[i, j] = exp(-u2) * (1.875 - 2.5 * u2 + .5 * u2**2) # (1.5 - u ** 2)
         f[i] /= sum(f[i])
-    
     element = 0.
-
     for i in range(nodes):
         ii = max(0, min(N_q[0] - 1, crd_int[0] + i - h_nodes))
         for j in range(nodes):
@@ -332,7 +331,7 @@ def gh_ap3d(q, qlim, dq, N_q, matrix):
     return element
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def gh_ap3d_tens(q, qlim, dq, N_q, matrix):
     """GH approximation procedure for tensor case on 3d mesh."""
     crd = (q - qlim[0]) / dq
@@ -356,7 +355,7 @@ def gh_ap3d_tens(q, qlim, dq, N_q, matrix):
     return tens
 
 
-@nb.njit(fastmath=True, nogil=True)
+@nb.njit(fastmath=True)
 def gh_ap3d_set_without_dq(q, qlim, dq, N_q, ar_invM, ar_G, ar_sqrtG, ar_Vmac,
                            ar_Vmic, ar_den, ar_d_invM, ar_d_Vmac, ar_d_Vmic,
                            ar_d_den):
@@ -546,20 +545,31 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
                                      V_mic, shell)[0], False
 
 
+@nb.njit(fastmath=True, nogil=True, parallel=True)
+def multithreading_trj_calc(input_param, N_tr):
+    
+    wrong_count = 0
+    traj_crd_out = np.empty((N_tr, len(input_param[0])))
+    traj_p_out = np.empty_like(traj_crd_out)
+    traj_time = np.empty(N_tr)
+    traj_temp = np.empty(N_tr)
+    for i in nb.prange(N_tr):
+        correct_traj = False
+        while not correct_traj:
+            q, p, t, temp_out, correct_traj = trajectory_calc(*input_param)
+            wrong_count += 0 if correct_traj else 1
+        traj_crd_out[i] = q.copy()
+        traj_p_out[i] = p.copy()
+        traj_time[i] = t
+        traj_temp[i] = temp_out
+    print(f' \tTotal:\t   {N + wrong_count}\n \tNot passed: {wrong_count}\n')
+    return traj_crd_out, traj_p_out, traj_time, traj_temp
+
+
 def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
                 V_micro, V, a_d, r_neck, sigma_r_neck,
                 dt:float=.01, N:int=3000, T_const:float=1.5, a_t:float=.3):
     """Calculates set of N trajectories with random starting point"""
-    traj = 0
-    wrong_count = 0
-    traj_crd_out = np.empty((N, len(q_start)))
-    traj_p_out = np.empty_like(traj_crd_out)
-    traj_time = np.empty(N)
-    traj_temp = np.empty(N)
-    flag_bar = type(exp_file) != str
-    if flag_bar:
-        pbar = tqdm(total=N, position=0, leave=True)
-    t_val = dt, sqrt(dt), int(round(.1 / dt)), int(100000 / dt)
 
     ampl = ampl_definer_jit(q_start, d2V_dq2)
     ql = np.array([q_start - np.array([0, 3, 3]) * dq,
@@ -567,29 +577,14 @@ def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
     ql[0][ql[0] < qlim[0]] = qlim[0][ql[0] < qlim[0]]
     ql[1][ql[1] > qlim[1]] = qlim[1][ql[1] > qlim[1]]
     V_st = V_starting - V - E_0
-
-    for i in range(N):
-        correct_traj = False
-        while not correct_traj:
-            q, p, t, temp_out,\
-            correct_traj = trajectory_calc(q_start, temperature, inv_m, fric,
-                                        sqrt_fric, V_macro, V_micro, V_st,
-                                        a_d, r_neck, sigma_r_neck, temp_ef,
-                                        shell_ef, t_star_enable, *t_val, ql, 
-                                        ampl)
-            wrong_count += 0 if correct_traj else 1
-        traj_crd_out[i] = q.copy()
-        traj_p_out[i] = p.copy()
-        traj_time[i] = t
-        traj_temp[i] = temp_out
-        if flag_bar:
-            pbar.update(1)
-
-    if flag_bar:
-        pbar.close()
-        print()
-    print(f'\tTotal: {N + wrong_count}\n\tNot passed: {wrong_count}\n')
-    return traj_crd_out, traj_p_out, traj_time, traj_temp
+    
+    inpt = (q_start, temperature, inv_m, fric, sqrt_fric, V_macro, V_micro,
+            V_st, a_d, r_neck, sigma_r_neck, temp_ef, shell_ef, t_star_enable,
+            dt, sqrt(dt), int(round(.1 / dt)), int(100000 / dt), ql, ampl)
+    
+    trj_q_out, trj_p_out, trj_time, trj_T = multithreading_trj_calc(inpt, N)
+    
+    return trj_q_out, trj_p_out, trj_time, trj_T 
 
 ###############################################################################
 ###############################################################################
@@ -986,20 +981,29 @@ if __name__ == "__main__":
                       + f'at ✓{diffiuse_mult**2:.2g} '
                       + f'{e0} {add_lim}' + I_fit
                       + '.xlsx') # &    q2 abs unlim randint _int_nck choice123 q2max25 q234bnd
-       
-        if type(info_full) == float or info_full in ('', ' '):
-            output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
-                            engine='openpyxl', index=False)
-            os.chdir(exact_place)
-            sys.exit()
-
+        
+        output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
+                        engine='openpyxl', index=False)
+        
+        emission_FF_flag = True
+        
         if info_full in ('p', 'pre', 'precise'):
-            param_cf = np.array([aux.fcs_pythonic(q) for q in q_out])
-            Bf_q, Bs_q, Bc_q = param_cf[:, 0], param_cf[:, 1], param_cf[:, 2]
+            param_cf = np.array([aux.q_to_nucl_param(q) for q in q_out])
+            # param_cf = np.array([aux.fcs_pythonic(q) for q in q_out])
+            Bf_q = param_cf[:, 0]
             A_f_0 = np.round(A * Bf_q).astype(int)
             Z_f_0 = np.round(Z * Bf_q).astype(int)
-            BCoul_q = param_cf[:, -2]
-            R12_q = r0 * param_cf[:, -1]
+            R12_q = r0 * param_cf[:, 1]
+            BCoul_q, Bs_q, Bc_q = param_cf[:, 2], param_cf[:, 3], param_cf[:, 4]
+            if emission_FF_flag:
+                emsn_out = [em.emission_FF(A, Z, A_LF, Z_LF, T, el)
+                            for A_LF, Z_LF, T, el in zip(A_f_0, Z_f_0,
+                                                         temp_out,
+                                                         param_cf[:, 1:])
+                            ]
+                A_f_1, Z_f_1, E_star_CN,\
+                    E_star_FF, e_n_FF = em.emFF_decoder(emsn_out)
+
         elif info_full in ('a','approx', 'approximate'):
             Bf_q = .5 * (1 + aux.q_into_alpha(q_out))
             # Bf_q = np.array({gh_ap3d(q, qlim, dq, N_q, bf) for q in q_out})
@@ -1008,23 +1012,35 @@ if __name__ == "__main__":
             Bs_q = np.array([gh_ap3d(q, qlim, dq, N_q, bs) for q in q_out])
             Bc_q = np.array([gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
             BCoul_q = np.array([gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
-            R12_q = r0 * np.array([gh_ap3d(q, qlim, dq, N_q, r12) for q in q_out])
-        output_2 = pd.DataFrame({'Af_0': A_f_0,
-                                 'Zf_0': Z_f_0,
-                                 'Bf': Bf_q,
-                                 'Bs': Bs_q,
-                                 'Bc': Bc_q,
-                                 'BCoul': BCoul_q,
-                                 'R12': R12_q})
+            R12_q = r0 * np.array([gh_ap3d(q, qlim, dq, N_q, r12)
+                                   for q in q_out])
+            if emission_FF_flag:
+                emsn_out = [em.emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q, bc,
+                                                bs, bk)
+                            for (q, T) in zip(q_out, temp_out)]
+                A_f_1, Z_f_1, E_star_CN,\
+                    E_star_FF, e_n_FF = em.emFF_decoder(emsn_out)
+        else:
+            os.chdir(exact_place)
+            sys.exit()
 
-        A_f = np.concatenate((A - A_f_0, A_f_0))
-        Z_f = np.concatenate((Z - Z_f_0, Z_f_0))
+        output_2 = pd.DataFrame({'Af_0' : A_f_0,
+                                 'Zf_0' : Z_f_0,
+                                 'Bf'   : Bf_q,
+                                 'Bs'   : Bs_q,
+                                 'Bc'   : Bc_q,
+                                 'BCoul': BCoul_q,
+                                 'R12'  : R12_q})
+
+        A_f = np.concatenate((A_f_0, A - A_f_0))
+        Z_f = np.concatenate((Z_f_0, Z - Z_f_0))
 
         Af_range = np.arange(A_f.min(), A_f.max() + 2, dtype=int)
         Zf_range = np.arange(Z_f.min(), Z_f.max() + 2, dtype=int)
 
-        h, Af_range, Zf_range = np.histogram2d(A_f, Z_f, bins=(Af_range, Zf_range),
-                                            density=True)
+        h, Af_range, Zf_range = np.histogram2d(A_f, Z_f,
+                                               bins=(Af_range, Zf_range),
+                                               density=True)
         h *= 2
         Z_A = np.empty((1,3))
         for i, el in enumerate(h.T):
@@ -1054,12 +1070,68 @@ if __name__ == "__main__":
                                      }
                                     )
 
+        if emission_FF_flag:
+
+            Af1_range = np.arange(A_f_1.min(), A_f_1.max() + 2, dtype=int)
+            Zf1_range = np.arange(Z_f_1.min(), Z_f_1.max() + 2, dtype=int)
+
+            h_1, Af1_range, Zf1_range = np.histogram2d(A_f_1.flatten(),
+                                                       Z_f_1.flatten(),
+                                                       bins=(Af1_range,
+                                                             Zf1_range),
+                                                       density=True)
+            h_1 *= 2
+            Z_A_1 = np.empty((1,3))
+            for i, el in enumerate(h_1.T):
+                el_mask = ~np.isclose(el, 0)
+                if any(el_mask):
+                    Z_A_1 = np.concatenate((Z_A_1,
+                                          np.array([[Zf1_range[i], j, k]
+                                          for j,k in zip(Af1_range[:-1][el_mask],
+                                                         el[el_mask])
+                                                    ])
+                                          ))
+            Z_A_1 = Z_A_1[1:]
+            
+            output_3YA_1 = pd.DataFrame({"A'f": Af1_range[:-1],
+                                         "Y(A'f)": h_1.sum(axis=1)
+                                         }
+                                        )
+
+            output_3YZ_1 = pd.DataFrame({"Z'f": Zf1_range[:-1],
+                                         "Y(Z'f)": h_1.sum(axis=0)
+                                         }
+                                        )
+
+            output_3_YZA_1 = pd.DataFrame({"Z'f": Z_A_1.T[0].astype(int),
+                                           "A'f": Z_A_1.T[1].astype(int),
+                                           "Y(Z'f,A'f)": Z_A_1.T[2]
+                                           }
+                                          )
+
+
         with pd.ExcelWriter(isotope_name + ' ' + file_name,
                             engine='openpyxl') as wr:
+            shift_idx = 3 if emission_FF_flag else 0
             output.to_excel(wr, sheet_name='Sheet1', index=False)
             output_2.to_excel(wr, sheet_name='Sheet2', index=False)
-            output_3YA.to_excel(wr, sheet_name='Sheet3', startcol=0, index=False)
-            output_3YZ.to_excel(wr, sheet_name='Sheet3', startcol=3, index=False)
-            output_3_YZA.to_excel(wr, sheet_name='Sheet3', startcol=6, index=False)
-
+            output_3YA.to_excel(wr, sheet_name='Sheet3', startcol=0,
+                                index=False)
+            output_3YZ.to_excel(wr, sheet_name='Sheet3',
+                                startcol= 2 + shift_idx,
+                                index=False)
+            output_3_YZA.to_excel(wr, sheet_name='Sheet3',
+                                  startcol= 7 + shift_idx,
+                                  index=False)
+            if emission_FF_flag:
+                output_3YA_1.to_excel(wr, sheet_name='Sheet3',
+                                      startcol= shift_idx - 1,
+                                      index=False)
+                output_3YZ_1.to_excel(wr, sheet_name='Sheet3',
+                                      startcol= 3 * shift_idx - 2,
+                                      index=False)
+                output_3_YZA_1.to_excel(wr, sheet_name='Sheet3',
+                                        startcol= 4 * shift_idx + 1,
+                                        index=False)
+            
         os.chdir(exact_place)
