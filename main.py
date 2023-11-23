@@ -113,7 +113,7 @@ def fourier_file_data(data_file: str):
        parametrization consisted all parameters, i.e transport coefficients"""
     exact_place = os.getcwd() # finds exact directory
     if OS == 'Windows':
-        os.chdir(path + 'Fourier shape data\\')
+        os.chdir(path + '\\Fourier shape data\\')
     elif OS == 'Darwin':
         os.chdir(path + '/Fourier shape data/')
     else:
@@ -185,7 +185,7 @@ def potential_reader(A, Z, N_q, dq, qlim, file_extension='.1'):
     isotope_file = isotope_name + file_extension
     exact_place = os.getcwd()   # finds exact directory
     if OS == 'Windows':
-        os.chdir(path + 'PES data\\')
+        os.chdir(path + '\\PES data\\')
     elif OS == 'Darwin':
         os.chdir(path + '/PES data/')
     else:
@@ -952,7 +952,7 @@ if __name__ == "__main__":
                                'p4': p_out[:, 2],
                                'Rneck': rn_out, 'Temperature': temp_out})
 
-        res_path = path + 'Result\\' if OS == 'Windows' else path + '/Result/'
+        res_path = path + '\\Result\\' if OS == 'Windows' else path + '/Result/'
         if not os.path.isdir(res_path):
             os.mkdir(res_path)
         res_path += f'{datetime.datetime.today().strftime("%d-%m-%y")}'
