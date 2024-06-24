@@ -278,7 +278,7 @@ def c_z(a):
     ev_series = - a_ev / (2 * np.arange(1, a_ev_l + 1) - 1) * p_m_ones(a_ev_l)
     odd_series = a_odd / np.arange(1, a_odd_l + 1) * p_m_ones(a_odd_l)
     c = pi / (3 * sum(ev_series))
-    z_sh = 1.5 * c ** 2 / pi * sum(odd_series)
+    z_sh = -1.5 * c ** 2 / pi * sum(odd_series)
     return z_sh, c
 
 

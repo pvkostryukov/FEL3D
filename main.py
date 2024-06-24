@@ -21,8 +21,6 @@ from numpy.random import normal as ξ
 from math import sqrt, exp, tanh, isnan, erf
 from scipy import linalg as lalg
 import matplotlib.pyplot as plt
-from tqdm import tqdm
-from numba_progress import ProgressBar
 import pandas as pd
 import re
 
@@ -45,7 +43,7 @@ a_t = .3
 # extensions = [['.1sh', '.1exsh', '.1', '.1ex', '.1el', '.1exl'], 
 #               ['.dat03', '.dat0329', '.dat', '.she', '.dat29', '.she29']]
 user_path = os.getcwd()
-OS = platform.system()
+OS_flag = platform.system() == 'Windows'
 
 ###############################################################################
 ######################## FUNCTION DESCRIPTION SECTION #########################
@@ -112,12 +110,11 @@ def fourier_file_data(data_file: str):
     """Extract input data calculated within framework of Fourier nuclear shape
        parametrization consisted all parameters, i.e transport coefficients"""
     exact_place = os.getcwd() # finds exact directory
-    if OS == 'Windows':
-        os.chdir(path + 'Fourier shape data\\')
-    elif OS == 'Darwin':
-        os.chdir(path + '/Fourier shape data/')
+    if OS_flag:
+        os.chdir(path + '\\Fourier shape data\\')
     else:
-        os.chdir(path + 'Fourier shape data//')    
+        os.chdir(path + '/Fourier shape data/')
+
     data = [line for line in open(data_file, 'r').readlines()
             if line[0] not in ('#', '\n') or line[0].isalpha()]  # reading rows
     os.chdir(exact_place)
@@ -184,12 +181,11 @@ def potential_reader(A, Z, N_q, dq, qlim, file_extension='.1'):
     isotope_name = nuc_definer(Z) + '-' + str(int(A))
     isotope_file = isotope_name + file_extension
     exact_place = os.getcwd()   # finds exact directory
-    if OS == 'Windows':
-        os.chdir(path + 'PES data\\')
-    elif OS == 'Darwin':
-        os.chdir(path + '/PES data/')
+    if OS_flag:
+        os.chdir(path + '\\PES data\\')
     else:
-        os.chdir(path + 'PES data//')
+        os.chdir(path + '/PES data/')
+
     if isotope_file not in os.listdir():
         os.chdir(exact_place)
         print('Error! there no file in PES data directory')
@@ -428,8 +424,8 @@ def ampl_definer_jit(q_start, d2V_dq2):
 
 
 @nb.njit(fastmath=True, nogil=True)
-def rand_function(dimentions: int):
-    return ξ(0, rt2, dimentions) - ξ(0, rt2, dimentions)
+def rand_function(dimentions:int, sigma=rt2):
+    return ξ(0, sigma, dimentions) - ξ(0, sigma, dimentions)
 
 
 @nb.njit(fastmath=True, nogil=True)
@@ -483,7 +479,7 @@ def temp_def(temp, p, E_total, i_m, a, V_mac, V_mic, shell):
 def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
                     V_micro, V_s2, a_d, r_neck, sigma_r_neck, temp_ef,
                     shell_ef, t_star_enable, dt, sqrt_dt, idt, step_limit,
-                    ql, ampl):
+                    ql, ampl, sqrt_mult):
     """Caclulates trajectory of Monte Carlo processes"""
     dim = len(q_start)
     temp = temperature
@@ -491,8 +487,8 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
     shell = shell_correction(temp, shell_ef, T_const, a_t)
     dp = np.zeros(dim)
     q2_max = qlim[1, 0]
-
     q, p = q1_def(q_start, V_s2, inv_m, ampl, ql)
+    q_track = [q_start, q.copy()]
 
     all_data_pack = (qlim, dq, N_q, inv_m, fric, sqrt_fric, V_macro,
                      V_micro, a_d, d_i_m_dq, dV_macro_dq, dV_micro_dq,
@@ -513,13 +509,19 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
         g *= g_coef
         sqrt_g *= sqrt(g_coef)
 
-        dp = np.array([sqrt_g[i].dot(rand_function(dim)) * sqrt_dt * t_star
-                       - (.5 * d_i_m[i] @ p + i_m @ g[i]) @ p * dt
+        # dp = np.array([sqrt_g[i].dot(ξ(0, scale=rt2, size=dim)) * sqrt_dt * t_star
+        #                - (.5 * d_i_m[i] @ p + i_m @ g[i]) @ p * dt
+        #                for i in range(dim)])
+
+        dp = np.array([sqrt_g[i].dot(rand_function(dim, sqrt_mult)) * sqrt_dt\
+                       * t_star - (.5 * d_i_m[i] @ p + i_m @ g[i]) @ p * dt
                        for i in range(dim)])
+
         dp -= dt * (dV_mac + shell * dV_mic - d_a * temp2)
         p += dp
         Δq = i_m @ (p - dp / 2)
         q += Δq * dt
+        q_track.append(q.copy())
 
         for i in range(1, dim):
             if i != 0 and not qlim[0, i] <= q[i] <= qlim[1, i]:
@@ -536,18 +538,17 @@ def trajectory_calc(q_start, temperature, inv_m, fric, sqrt_fric, V_macro,
                 break
             q[0] = q2_max
             return q, p, time * dt, temp_def(temp, p, E_total, i_m, a, V_mac,
-                                             V_mic, shell)[0], q[2] < 0
+                                             V_mic, shell)[0], q[2] <= 0 , q_track
         elif exit_condition(q, r_neck_traj) and q[0] > 1.5:
             temp = temp_def(temp, p, E_total, i_m, a, V_mac, V_mic, shell)[0]
-            return q, p, time * dt, temp, temperature + 0.1 < temp
+            return q, p, time * dt, temp, temperature + 0.1 < temp , q_track
 
     return q, p, time * dt, temp_def(temp, p, E_total, i_m, a, V_mac,
-                                     V_mic, shell)[0], False
+                                     V_mic, shell)[0], False, q_track
 
 
-@nb.njit(fastmath=True, nogil=True, parallel=True)
+# @nb.njit(fastmath=True, nogil=True, parallel=True)
 def multithreading_trj_calc(input_param, N_tr):
-    
     wrong_count = 0
     traj_crd_out = np.empty((N_tr, len(input_param[0])))
     traj_p_out = np.empty_like(traj_crd_out)
@@ -556,8 +557,12 @@ def multithreading_trj_calc(input_param, N_tr):
     for i in nb.prange(N_tr):
         correct_traj = False
         while not correct_traj:
-            q, p, t, temp_out, correct_traj = trajectory_calc(*input_param)
+            # q, p, t, temp_out, correct_traj = trajectory_calc(*input_param)
+            q, p, t, temp_out, correct_traj, q_tr = trajectory_calc(*input_param)
             wrong_count += 0 if correct_traj else 1
+
+        np.savetxt('trajectory.txt', np.array(q_tr))
+
         traj_crd_out[i] = q.copy()
         traj_p_out[i] = p.copy()
         traj_time[i] = t
@@ -567,7 +572,7 @@ def multithreading_trj_calc(input_param, N_tr):
 
 
 def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
-                V_micro, V, a_d, r_neck, sigma_r_neck,
+                V_micro, V, a_d, r_neck, sigma_r_neck, sqrt_mult,
                 dt:float=.01, N:int=3000, T_const:float=1.5, a_t:float=.3):
     """Calculates set of N trajectories with random starting point"""
 
@@ -577,10 +582,11 @@ def monte_carlo(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric, V_macro,
     ql[0][ql[0] < qlim[0]] = qlim[0][ql[0] < qlim[0]]
     ql[1][ql[1] > qlim[1]] = qlim[1][ql[1] > qlim[1]]
     V_st = V_starting - V - E_0
-    
+
     inpt = (q_start, temperature, inv_m, fric, sqrt_fric, V_macro, V_micro,
             V_st, a_d, r_neck, sigma_r_neck, temp_ef, shell_ef, t_star_enable,
-            dt, sqrt(dt), int(round(.1 / dt)), int(100000 / dt), ql, ampl)
+            dt, sqrt(dt), int(round(.1 / dt)), int(100000 / dt), ql, ampl,
+            sqrt_mult)
     
     trj_q_out, trj_p_out, trj_time, trj_T = multithreading_trj_calc(inpt, N)
     
@@ -679,12 +685,11 @@ def r_fit_procedure_mod(q_start, temperature, d2V_dq2, inv_m, fric, sqrt_fric,
 
 def exp_res_aut(file_name, dir_path):
     exact_place = os.getcwd() # finds exact directory
-    if OS == 'Windows':
-        os.chdir(dir_path + 'Experimental data\\')
-    elif OS == 'Darwin':
-        os.chdir(dir_path + '/Experimental data/')
+    if OS_flag:
+        os.chdir(dir_path + '\\Experimental data\\')
     else:
-        os.chdir(dir_path + 'Experimental data//')
+        os.chdir(dir_path + '/Experimental data/')
+
     A = ''.join([num for num in file_name[:5] if num.isdigit()])
     A = int(A)
     file = open(file_name, 'r')
@@ -801,18 +806,19 @@ if __name__ == "__main__":
             if type(gauss_flag) != bool else gauss_flag and (not isnan(r_neck))
         # poisson_flag = False\
             # if type(poisson_flag) != bool and isnan(r_neck) else poisson_flag
+
         poisson_flag = poisson_flag and isnan(r_neck)
         elong_flag = False if type(elong_flag) != bool else elong_flag
         limit_cut_flag = False if type(limit_cut_flag) != bool else limit_cut_flag
         short_q2_flg = False if type(short_q2_flg) != bool else short_q2_flg
 
         if i != 0:
-            for func in [ampl_definer_jit, trajectory_calc, gh_ap3d, gh_ap3d_tens]:
+            for func in [ampl_definer_jit, trajectory_calc,
+                         gh_ap3d, gh_ap3d_tens]:
                 func.recompile()
 
         diffiuse_mult = 1 if isnan(diffiuse_mult) else sqrt(diffiuse_mult)
-        if diffiuse_mult > 1:
-            rt2 = diffiuse_mult
+        sqrt_mult = diffiuse_mult * rt2 if diffiuse_mult != 1 else rt2
         Z, A, N = int(Z), int(A), int(N)
 
         SHE_flag = Z > 103
@@ -825,6 +831,7 @@ if __name__ == "__main__":
                          SHE_flag and elong_flag and (not short_q2_flg)
                          ]
                         )
+
         pot_file_ext  = np.array(extensions[0])[fl_m][0]
         fourier_file = 'fourier' + np.array(extensions[1])[fl_m][0]
 
@@ -832,13 +839,15 @@ if __name__ == "__main__":
             N_q, dq, qlim, m_0, f_0, bs, bc, bk, bf,\
                 r12, bx, vol, c, rn = fourier_file_data(fourier_file)
             fourier_file_prev = fourier_file
-            dim = len(dq)
             q_grid = [np.linspace(qlim[0, i], qlim[1, i], N_q[i])
                       for i in range(dim)]
 
         if (Z, A) != (Z_prev, A_prev):
             r0 = 1.2 * A ** (1/3)
             r_nucleon = 1 / r0
+            r_neck = r_neck if isnan(r_neck) else r_neck * r_nucleon
+            sigma_r_neck = sigma_r_neck if isnan(sigma_r_neck)\
+                           else sigma_r_neck * r_nucleon
             m_cf = 0.0113 * A ** (5 / 3)
             fric_cf = 0.275 * A ** (4 / 3)
             m = m_0.copy() * m_cf
@@ -856,8 +865,7 @@ if __name__ == "__main__":
                                                                dq[0], dq[1],
                                                                dq[2],
                                                                edge_order=2))
-
-            a_d = density(A, Z, bs, bk, bc)  # aden.copy()
+            a_d = density(A, Z, bs, bk, bc)
             Z_prev, A_prev = Z, A
 
         if pot_file_ext != prev_pot_file_ext:
@@ -890,7 +898,7 @@ if __name__ == "__main__":
                                             starting_point.split('from file')[-1])
                 starting_point, start_idx,\
                     V_starting = st_pnt_checking(starting_point, V)
-            elif starting_point in ['spont', 'spontaneus']:
+            elif starting_point in ['spnt','spont', 'spontaneus']:
                 q_2sad_idx = ((st_pnt_def(A, Z) - qlim[0]) / dq).astype(int)
                 starting_point, start_idx,\
                     V_starting = spontaneus_st_point(V, ground_state, q_2sad_idx)
@@ -922,7 +930,7 @@ if __name__ == "__main__":
         temperature = sqrt(E_star / gh_ap3d(starting_point, qlim,
                                             dq, N_q, a_d)
                            )
-    
+
         sh = shell_correction(temperature, shell_ef, T_const, a_t)
         F = V_macro + sh *  V_micro - a_d * temperature ** 2
 
@@ -935,14 +943,14 @@ if __name__ == "__main__":
 
         inp_var = starting_point, temperature, d2V_dq2, inv_m, fric,\
                     sqrt_fric, V_macro, V_micro, V, a_d
+
         if isnan(r_neck) and isnan(sigma_r_neck) and type(exp_file) == str:
             (q_out, p_out, traj_time, temp_out), r_neck, sigma_r_neck,\
                 fit_out = r_fit_procedure_mod(*inp_var, dt, N)
-                # fit_out = r_fit_procedure(*inp_var, dt, N)
         else:
             q_out, p_out, traj_time,\
                   temp_out = monte_carlo(*inp_var, r_neck,
-                                         sigma_r_neck, dt, N)
+                                         sigma_r_neck, sqrt_mult, dt, N)
 
         rn_out = np.array([gh_ap3d(i, qlim, dq, N_q, rn) for i in q_out])
         output = pd.DataFrame({'time': traj_time,
@@ -952,7 +960,7 @@ if __name__ == "__main__":
                                'p4': p_out[:, 2],
                                'Rneck': rn_out, 'Temperature': temp_out})
 
-        res_path = path + 'Result\\' if OS == 'Windows' else path + '/Result/'
+        res_path = path + '\\Result\\' if OS_flag else path + '/Result/'
         if not os.path.isdir(res_path):
             os.mkdir(res_path)
         res_path += f'{datetime.datetime.today().strftime("%d-%m-%y")}'
@@ -960,51 +968,63 @@ if __name__ == "__main__":
             os.mkdir(res_path)
         os.chdir(res_path)
 
-        add_p = 'P ' if poisson_flag else ''
-        add_g = 'G ' if gauss_flag else ''
-        add_lim = 'q2 lim' if limit_cut_flag else 'q2 prob'
-        e0 = 'e0_{}'.format(E_0).replace('.', '')
+        add_p   = 'P' if poisson_flag else ''
+        add_g   = 'G' if gauss_flag else ''
+        add_lim = 'q2l' if limit_cut_flag else 'q2p'
+        e0 = f'_e0({E_0:.2g})'
 
         I_fit = ''
         if 'fit_out' in globals():
             pd.DataFrame(fit_out[0]).to_csv(isotope_name + ' I(R, σ) table.csv')
             I_fit = f'(I = {fit_out[1]:.4g} {exp_file})'
 
-        file_name = (f'N = {len(q_out)} dt= {dt} {add_g}{add_p}'
-                      + f'R_n= {r_neck * r0:.4g} with σ = {sigma_r_neck:.4g}'
-                      + ' at q_st = ' 
-                      + f'{" ".join(str(starting_point.round(3)).split())}'[1:-1]
-                      + f' E = {round(E_star, 3)} '
-                      + f't_cor = {str(temp_ef)} sh_cor = {shell_ef} '
-                      + f't_star = {t_star_enable} '
-                      + f'& {pot_file_ext[1:]} pot type '
-                      + f'at ✓{diffiuse_mult**2:.2g} '
-                      + f'{e0} {add_lim}' + I_fit
-                      + '.xlsx') # &    q2 abs unlim randint _int_nck choice123 q2max25 q234bnd
-        
-        output.to_excel(isotope_name + ' ' + file_name, sheet_name='Sheet1',
-                        engine='openpyxl', index=False)
-        
+        file_name = (nuc_definer(Z).lower() +
+                     f'{int(A)}' + 
+                     f'_e({round(E_star, 3)})' +
+                     f'_n{len(q_out)}' +
+                     f'_dt{str(dt)[1:] if int(dt) == 0 else dt}'.replace('.',
+                                                                         '') + 
+                     re.sub('0(?=[.])', '',
+                            f'_{add_g}({r_neck / r_nucleon:.2g}_{sigma_r_neck / r_nucleon:.2g})') +
+                     re.sub('0(?=[.])', '',
+                            r'_st({:.3g}_{:.3g}_{:.3g})'.format(*starting_point)) + 
+                     f'{"_t(" if any((shell_ef, temp_ef, t_star_enable)) else ""}' +
+                         f'{"sh" if shell_ef else ""}' +
+                         f'{"_" if shell_ef & any((temp_ef, t_star_enable)) else ""}'+ 
+                         f'{"g" if temp_ef else ""}' +
+                         f'{"_" if t_star_enable & temp_ef else ""}'+ 
+                         f'{"*)" if t_star_enable else ")"}'+ 
+                     e0 +
+                     f'_pot{pot_file_ext[1:]}' +
+                     f'_✓{diffiuse_mult**2:.2g}' + I_fit +
+                     '.xlsx')
+
         emission_FF_flag = True
-        
+
         if info_full in ('p', 'pre', 'precise'):
-            param_cf = np.array([aux.q_to_nucl_param(q) for q in q_out])
-            # param_cf = np.array([aux.fcs_pythonic(q) for q in q_out])
+            param_cf = np.zeros((N, 11))
+            for i in nb.prange(N):
+                param_cf[i] = aux.q_to_nucl_param(q_out[i])     
+            # param_cf = np.array([aux.q_to_nucl_param(q) for q in q_out])
             Bf_q = param_cf[:, 0]
             A_f_0 = np.round(A * Bf_q).astype(int)
             Z_f_0 = np.round(Z * Bf_q).astype(int)
             R12_q = r0 * param_cf[:, 1]
             BCoul_q, Bs_q, Bc_q = param_cf[:, 2], param_cf[:, 3], param_cf[:, 4]
             if emission_FF_flag:
-                emsn_out = [em.emission_FF(A, Z, A_LF, Z_LF, T, el)
-                            for A_LF, Z_LF, T, el in zip(A_f_0, Z_f_0,
-                                                         temp_out,
-                                                         param_cf[:, 1:])
-                            ]
+                emsn_out = [[] for _ in range(N)]
+                for i in nb.prange(N):
+                    emsn_out[i] = em.emission_FF(A, Z, A_f_0[i], Z_f_0[i],
+                                                 temp_out[i], param_cf[i, 1:])
+                # emsn_out = [em.emission_FF(A, Z, A_LF, Z_LF, T, el)
+                #             for A_LF, Z_LF, T, el in zip(A_f_0, Z_f_0,
+                #                                          temp_out,
+                #                                          param_cf[:, 1:])
+                #             ]
                 A_f_1, Z_f_1, E_star_CN,\
                     E_star_FF, e_n_FF = em.emFF_decoder(emsn_out)
 
-        elif info_full in ('a','approx', 'approximate'):
+        elif info_full in ('a', 'approx', 'approximate'):
             Bf_q = .5 * (1 + aux.q_into_alpha(q_out))
             # Bf_q = np.array({gh_ap3d(q, qlim, dq, N_q, bf) for q in q_out})
             A_f_0 = np.round(A * Bf_q).astype(int)
@@ -1015,12 +1035,14 @@ if __name__ == "__main__":
             R12_q = r0 * np.array([gh_ap3d(q, qlim, dq, N_q, r12)
                                    for q in q_out])
             if emission_FF_flag:
-                emsn_out = [em.emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q, bc,
-                                                bs, bk)
+                emsn_out = [em.emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q,
+                                                bc, bs, bk)
                             for (q, T) in zip(q_out, temp_out)]
                 A_f_1, Z_f_1, E_star_CN,\
                     E_star_FF, e_n_FF = em.emFF_decoder(emsn_out)
         else:
+            output.to_excel(file_name, sheet_name='Sheet1',
+                            engine='openpyxl', index=False)
             os.chdir(exact_place)
             sys.exit()
 
@@ -1031,18 +1053,18 @@ if __name__ == "__main__":
                                  'Bc'   : Bc_q,
                                  'BCoul': BCoul_q,
                                  'R12'  : R12_q})
-
+        
         A_f = np.concatenate((A_f_0, A - A_f_0))
         Z_f = np.concatenate((Z_f_0, Z - Z_f_0))
 
         Af_range = np.arange(A_f.min(), A_f.max() + 2, dtype=int)
         Zf_range = np.arange(Z_f.min(), Z_f.max() + 2, dtype=int)
 
-        h, Af_range, Zf_range = np.histogram2d(A_f, Z_f,
-                                               bins=(Af_range, Zf_range),
+        h, Af_range, Zf_range = np.histogram2d(A_f, Z_f, bins=(Af_range,
+                                                               Zf_range),
                                                density=True)
         h *= 2
-        Z_A = np.empty((1,3))
+        Z_A = np.empty((1, 3))
         for i, el in enumerate(h.T):
             el_mask = ~np.isclose(el, 0)
             if any(el_mask):
@@ -1071,7 +1093,10 @@ if __name__ == "__main__":
                                     )
 
         if emission_FF_flag:
-
+            output_2["A'_L"] = A_f_1[:, 0]
+            output_2["A'_R"] = A_f_1[:, 1]
+            output_2["ε_n"]  = [[[round(el, 6) for el in el1] for el1 in _]
+                                for _ in e_n_FF]
             Af1_range = np.arange(A_f_1.min(), A_f_1.max() + 2, dtype=int)
             Zf1_range = np.arange(Z_f_1.min(), Z_f_1.max() + 2, dtype=int)
 
@@ -1081,16 +1106,19 @@ if __name__ == "__main__":
                                                              Zf1_range),
                                                        density=True)
             h_1 *= 2
-            Z_A_1 = np.empty((1,3))
+            Z_A_1 = np.empty((1, 3))
             for i, el in enumerate(h_1.T):
                 el_mask = ~np.isclose(el, 0)
                 if any(el_mask):
                     Z_A_1 = np.concatenate((Z_A_1,
-                                          np.array([[Zf1_range[i], j, k]
-                                          for j,k in zip(Af1_range[:-1][el_mask],
-                                                         el[el_mask])
-                                                    ])
-                                          ))
+                                            np.array([[Zf1_range[i], j, k]
+                                                      for j,k in
+                                                      zip(Af1_range[:-1][el_mask],
+                                                          el[el_mask])
+                                                      ]
+                                                     )
+                                            )
+                                           )
             Z_A_1 = Z_A_1[1:]
             
             output_3YA_1 = pd.DataFrame({"A'f": Af1_range[:-1],
@@ -1109,9 +1137,8 @@ if __name__ == "__main__":
                                            }
                                           )
 
+        with pd.ExcelWriter(file_name, engine='openpyxl') as wr:
 
-        with pd.ExcelWriter(isotope_name + ' ' + file_name,
-                            engine='openpyxl') as wr:
             shift_idx = 3 if emission_FF_flag else 0
             output.to_excel(wr, sheet_name='Sheet1', index=False)
             output_2.to_excel(wr, sheet_name='Sheet2', index=False)
@@ -1133,5 +1160,7 @@ if __name__ == "__main__":
                 output_3_YZA_1.to_excel(wr, sheet_name='Sheet3',
                                         startcol= 4 * shift_idx + 1,
                                         index=False)
-            
+
         os.chdir(exact_place)
+    print('Calculations ends:   ' +
+          datetime.datetime.today().strftime("%d-%m-%Y %H:%M:%S"))
