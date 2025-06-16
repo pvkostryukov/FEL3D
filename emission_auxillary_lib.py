@@ -20,7 +20,7 @@ import auxiliary_library as aux
 
 
 # from main import dim, nodes, h_nodes, γ
-from main import gh_ap3d as gh3d
+from gauss_hermit import gh_ap3d as gh3d
 
 ###############################################################################
 ###############################################################################
