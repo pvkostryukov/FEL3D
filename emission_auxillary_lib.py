@@ -1114,7 +1114,8 @@ def emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q, Bc, Bs, Bk):
     bs1, bk1, bc1 = cfs[1].copy()
     bs2, bk2, bc2 = cfs[2].copy()
 
-    A_f = np.round(v_r[0] * A); A_f = np.array([A_f, A - A_f], dtype=int64)  
+    A_f = np.round(v_r[0] * A)
+    A_f = np.array([A_f, A - A_f], dtype=int64)
     A_h = max(A_f)
 
     hi = np.where(A_f == A_h)[0][0]

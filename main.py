@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Главный модуль FEL3D для симуляции ядерного деления
-ПОЛНАЯ ФУНКЦИОНАЛЬНОСТЬ: все возможности оригинального кода + модульная архитектура
+ПОЛНАЯ ФУНКЦИОНАЛЬНОСТЬ + МАКСИМАЛЬНАЯ ОПТИМИЗАЦИЯ ПРОИЗВОДИТЕЛЬНОСТИ
 
 @author: KPV
+Optimized version with numba JIT acceleration
 """
 
 import os
@@ -28,7 +29,7 @@ import gauss_hermit as gh
 import data_handling as dh
 import physics_core as phys
 import physics_numba as pnb
-import monte_carlo as mc
+import monte_carlo_optimized as mc
 import auxiliary_library as aux
 import emission_auxillary_lib as em
 
@@ -43,6 +44,35 @@ from config import (
 user_path = os.getcwd()
 OS_flag = platform.system() == 'Windows'
 path = os.getcwd()
+
+
+###############################################################################
+###################### ФУНКЦИЯ ПРЕДВАРИТЕЛЬНОЙ КОМПИЛЯЦИИ ####################
+###############################################################################
+
+def precompile_jit_functions():
+    """Предварительная компиляция JIT-функций для максимальной производительности"""
+    print("Precompiling JIT functions for optimal performance...")
+    
+    # Создаем тестовые данные
+    test_q = np.array([0.5, 0.0, 0.0])
+    test_qlim = np.array([[0.0, -1.0, -1.0], [2.0, 1.0, 1.0]])
+    test_dq = np.array([0.1, 0.1, 0.1])
+    test_N_q = np.array([20, 20, 20])
+    test_matrix = np.ones((20, 20, 20))
+    test_tensor = np.ones((20, 20, 20, 3, 3))
+    
+    # Принудительная компиляция основных функций
+    try:
+        _ = pnb.gh_ap3d_jit(test_q, test_qlim, test_dq, test_N_q, test_matrix)
+        _ = pnb.gh_ap3d_tens_jit(test_q, test_qlim, test_dq, test_N_q, test_tensor)
+        _ = pnb.ampl_definer_jit(test_q, np.array([test_matrix, test_matrix, test_matrix]), 
+                                test_qlim, test_dq, test_N_q)
+        _ = pnb.density_jit(235, 92, test_matrix, test_matrix, test_matrix)
+        print("✓ JIT compilation completed successfully")
+    except Exception as e:
+        print(f"Warning: JIT precompilation failed: {e}")
+        print("Code will still work but may be slower on first run")
 
 
 ###############################################################################
@@ -129,6 +159,9 @@ def prepare_global_parameters(N_q, dq, qlim, vol, rn, V, ground_state,
 
 if __name__ == "__main__":
 
+    # ОПТИМИЗАЦИЯ: Предварительная компиляция JIT-функций
+    precompile_jit_functions()
+
     if 'input.xlsx' not in os.listdir():
         print('Error: there no input file!')
         sys.exit()
@@ -169,10 +202,10 @@ if __name__ == "__main__":
             print(f"Invalid parameters for isotope {i}: {e}")
             continue
 
-        # Recompile functions for different iterations
+        # ОПТИМИЗАЦИЯ: Перекомпиляция JIT-функций при смене изотопа
         if i != 0:
             for func in [pnb.ampl_definer_jit, pnb.trajectory_calc_jit,
-                         gh.gh_ap3d, gh.gh_ap3d_tens]:
+                         pnb.gh_ap3d_jit, pnb.gh_ap3d_tens_jit]:  # Используем JIT-версии
                 func.recompile()
 
         # Обработка флагов
@@ -234,8 +267,14 @@ if __name__ == "__main__":
                                                                dq[2],
                                                                edge_order=2))
 
-            # ИСПОЛЬЗУЕМ МОДУЛЬ PHYSICS_CORE для плотности
-            a_d = phys.density(A, Z, bs, bk, bc)
+            # ОПТИМИЗАЦИЯ: Используем JIT-версию функции плотности
+            try:
+                a_d = pnb.density_jit(A, Z, bs, bk, bc)
+                print("✓ Using optimized density_jit")
+            except:
+                # Используем обычную версию
+                a_d = phys.density(A, Z, bs, bk, bc)
+                print("⚠ Using standard density function")
             Z_prev, A_prev = Z, A
 
         # ИСПОЛЬЗУЕМ МОДУЛЬ DATA_HANDLING для потенциалов
@@ -292,8 +331,8 @@ if __name__ == "__main__":
                 print('There no file ' + exp_file + ' in experimental data directory')
             os.chdir(exact_place)
 
-        # ИСПОЛЬЗУЕМ МОДУЛЬ GAUSS_HERMIT для интерполяции
-        temperature = sqrt(E_star / gh.gh_ap3d(starting_point, qlim, dq, N_q, a_d))
+        # ОПТИМИЗАЦИЯ: Используем JIT-версию для интерполяции
+        temperature = sqrt(E_star / pnb.gh_ap3d_jit(starting_point, qlim, dq, N_q, a_d))
 
         # ИСПОЛЬЗУЕМ МОДУЛЬ PHYSICS_CORE для поправок
         sh = phys.shell_correction(temperature, shell_ef, T_CONST, A_T)
@@ -340,20 +379,25 @@ if __name__ == "__main__":
 
         if isnan(r_neck) and isnan(sigma_r_neck) and type(exp_file) == str:
             print("R fit procedure temporarily disabled")
+            # ОПТИМИЗАЦИЯ: Используем оптимизированную версию Monte Carlo
             q_out, p_out, traj_time, \
-                temp_out = mc.monte_carlo(*inp_var, r_neck,
-                                       sigma_r_neck, sqrt_mult, dt, N, 
-                                       T_CONST, A_T, global_params)
+                temp_out = mc.monte_carlo_optimized(*inp_var, r_neck,
+                                                   sigma_r_neck, sqrt_mult, dt, N, 
+                                                   T_CONST, A_T, global_params,
+                                                    )
         else:
-            # MONTE CARLO ИСПОЛЬЗУЕТ РЕФАКТОРЕННЫЕ МОДУЛИ
+            # ОПТИМИЗАЦИЯ: Используем оптимизированную версию Monte Carlo
             q_out, p_out, traj_time, \
-                temp_out = mc.monte_carlo(*inp_var, r_neck,
-                                       sigma_r_neck, sqrt_mult, dt, N,
-                                       T_CONST, A_T, global_params)
+                temp_out = mc.monte_carlo_optimized(*inp_var, r_neck,
+                                                   sigma_r_neck, sqrt_mult, dt, N,
+                                                   T_CONST, A_T, global_params,
+                                                   use_parallel=True
+                                                    )
 
         # ========================= ПОЛНАЯ ОБРАБОТКА РЕЗУЛЬТАТОВ =========================
 
-        rn_out = np.array([gh.gh_ap3d(i, qlim, dq, N_q, rn) for i in q_out])
+        # ОПТИМИЗАЦИЯ: Используем JIT-версию для интерполяции
+        rn_out = np.array([pnb.gh_ap3d_jit(i, qlim, dq, N_q, rn) for i in q_out])
         output = pd.DataFrame({'time': traj_time,
                                'q2': q_out[:, 0], 'q3': q_out[:, 1],
                                'q4': q_out[:, 2],
@@ -389,10 +433,11 @@ if __name__ == "__main__":
             Bf_q = .5 * (1 + aux.q_into_alpha(q_out))
             A_f_0 = np.round(A * Bf_q).astype(int)
             Z_f_0 = np.round(Z * Bf_q).astype(int)
-            Bs_q = np.array([gh.gh_ap3d(q, qlim, dq, N_q, bs) for q in q_out])
-            Bc_q = np.array([gh.gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
-            BCoul_q = np.array([gh.gh_ap3d(q, qlim, dq, N_q, bc) for q in q_out])
-            R12_q = r0 * np.array([gh.gh_ap3d(q, qlim, dq, N_q, r12)
+            # ОПТИМИЗАЦИЯ: Используем JIT-версии для всех интерполяций
+            Bs_q = np.array([pnb.gh_ap3d_jit(q, qlim, dq, N_q, bs) for q in q_out])
+            Bc_q = np.array([pnb.gh_ap3d_jit(q, qlim, dq, N_q, bc) for q in q_out])
+            BCoul_q = np.array([pnb.gh_ap3d_jit(q, qlim, dq, N_q, bc) for q in q_out])
+            R12_q = r0 * np.array([pnb.gh_ap3d_jit(q, qlim, dq, N_q, r12)
                                    for q in q_out])
             if emission_FF_flag:
                 emsn_out = [em.emission_FF_gh3d(q, A, Z, T, qlim, dq, N_q,
@@ -532,7 +577,7 @@ if __name__ == "__main__":
                      e0 +
                      f'_pot{pot_file_ext[1:]}' +
                      f'_✓{diffiuse_mult ** 2:.2g}' + I_fit +
-                     '.xlsx')
+                     '_OPTIMIZED.xlsx')  # Добавляем маркер оптимизации
 
         # Сохранение в Excel с множественными листами
         with pd.ExcelWriter(file_name, engine='openpyxl') as wr:
@@ -555,7 +600,8 @@ if __name__ == "__main__":
                                         startcol=4 * shift_idx + 1, index=False)
 
         os.chdir(exact_place)
-        print(f"Results saved: {file_name}")
+        print(f"✓ Results saved: {file_name}")
 
     print('Calculations ends:   ' +
           datetime.datetime.today().strftime("%d-%m-%Y %H:%M:%S"))
+    print("🚀 OPTIMIZED VERSION - Performance enhanced with numba JIT compilation")
